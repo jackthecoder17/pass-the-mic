@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Pass The Mic</title>
+<meta name="description" content="The sing-the-next-line party game. Pick a song, pass the phone — when the music stops, you sing. The AI is listening.">
+<meta name="theme-color" content="#0e0817">
+<meta property="og:title" content="Pass The Mic 🎤">
+<meta property="og:description" content="When the music stops, you sing the next line. Miss it, lose a life. Last one singing wins.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800;900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
+<canvas id="confetti" aria-hidden="true"></canvas>
+
+<main id="app">
+  <header id="board" class="board hidden"></header>
+  <div id="ytwrap"><div id="yt"></div></div>
+
+  <!-- HOME -->
+  <section id="s-home" class="screen active">
+    <div class="hero">
+      <div class="logo">PASS<br>THE <span>MIC</span></div>
+      <p class="tag">Pick a song. Pass the phone. When the music stops, <b>you sing the next line.</b> The AI is listening 👂</p>
+      <button class="btn big" id="startBtn">Start a game</button>
+      <ol class="how">
+        <li><span>🎵</span><div><b>The song plays</b> with lyrics on screen</div></li>
+        <li><span>⏸️</span><div><b>It suddenly cuts out</b> and the lyrics vanish</div></li>
+        <li><span>🎤</span><div><b>You carry on singing</b> from memory</div></li>
+        <li><span>💔</span><div><b>Miss it, lose a life.</b> Last one singing wins.</div></li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- PLAYERS -->
+  <section id="s-players" class="screen">
+    <h2>Who's playing?</h2>
+    <form id="addForm" class="row">
+      <input id="nameIn" placeholder="Player name" maxlength="14" autocomplete="off" enterkeyhint="done">
+      <button class="btn" type="submit">Add</button>
+    </form>
+    <ul id="plist" class="plist"></ul>
+    <div class="opts">
+      <label>Lives
+        <select id="livesSel"><option>1</option><option>2</option><option selected>3</option><option>5</option></select>
+      </label>
+      <label>Accent
+        <select id="langSel"><option value="en-US">🇺🇸 US</option><option value="en-GB">🇬🇧 UK</option><option value="en-NG">🇳🇬 Nigeria</option></select>
+      </label>
+    </div>
+    <div class="mic-test">
+      <button class="btn ghost" id="micTest" type="button">🎤 Test the mic</button>
+      <p id="micOut" class="muted small"></p>
+    </div>
+    <p id="srWarn" class="warn hidden">This browser can't listen to singing. Use Chrome or Safari. You can still play: the room will vote on every turn.</p>
+    <button class="btn big" id="toSong" disabled>Pick a song →</button>
+  </section>
+
+  <!-- SONG -->
+  <section id="s-song" class="screen">
+    <h2>Pick a song</h2>
+    <form id="searchForm" class="row">
+      <input id="q" placeholder="Song or artist…" autocomplete="off" enterkeyhint="search">
+      <button class="btn" type="submit">Search</button>
+    </form>
+    <p class="muted small">Or try one of these:</p>
+    <div id="quick" class="quick"></div>
+    <p id="songStatus" class="status"></p>
+    <ul id="results" class="results"></ul>
+  </section>
+
+  <!-- HANDOFF -->
+  <section id="s-handoff" class="screen center">
+    <p class="kicker" id="roundInfo"></p>
+    <p class="muted">Pass the phone to</p>
+    <div class="who" id="handName"></div>
+    <p class="muted small narrow">Listen closely. When the music stops, it's your turn to carry on.</p>
+    <button class="btn big" id="readyBtn">I'm ready ▶</button>
+  </section>
+
+  <!-- LISTEN -->
+  <section id="s-listen" class="screen">
+    <div class="karaoke" id="kara">
+      <p class="kl prev"></p>
+      <p class="kl cur"></p>
+      <p class="kl next"></p>
+    </div>
+    <p class="listen-hint"><span class="pulse"></span><b id="listenName"></b>, stay ready… the music could stop any second</p>
+    <div class="tools">
+      <div class="sync">
+        <span class="muted small">Lyrics out of sync?</span>
+        <button class="chip" data-sync="-0.3" type="button">Too early</button>
+        <button class="chip" data-sync="0.3" type="button">Too late</button>
+        <span class="muted small" id="syncVal"></span>
+      </div>
+      <button class="chip" id="skipBtn" type="button">Skip ahead ⏭</button>
+    </div>
+  </section>
+
+  <!-- TURN -->
+  <section id="s-turn" class="screen center">
+    <div class="who sm" id="turnName"></div>
+    <div class="go" id="goTxt">CONTINUE!</div>
+    <p class="cue" id="cue"></p>
+    <div class="chips" id="chips"></div>
+    <div class="timer"><i id="timerBar"></i></div>
+    <p class="heard" id="heard"></p>
+    <button class="btn" id="doneBtn" type="button">Done ✓</button>
+  </section>
+
+  <!-- REVEAL -->
+  <section id="s-reveal" class="screen center">
+    <div class="score" id="scoreNum">0%</div>
+    <div class="verdict" id="verdict"></div>
+    <div class="chips" id="revChips"></div>
+    <p class="heard" id="revHeard"></p>
+    <div id="voteBox" class="vote hidden">
+      <p>The AI can't decide. <b>The room decides:</b></p>
+      <div class="row">
+        <button class="btn pass" id="votePass" type="button">👍 Pass</button>
+        <button class="btn fail" id="voteFail" type="button">👎 Fail</button>
+      </div>
+    </div>
+    <button class="btn big hidden" id="contBtn" type="button">Continue →</button>
+  </section>
+
+  <!-- END / SONG OVER -->
+  <section id="s-end" class="screen center">
+    <p class="kicker" id="endKicker"></p>
+    <div class="who" id="endTitle"></div>
+    <ol class="rank" id="rank"></ol>
+    <div class="col">
+      <button class="btn big" id="nextSong" type="button">Next song 🎵</button>
+      <button class="btn big" id="again" type="button">Play again 🔁</button>
+      <button class="btn ghost" id="endGame" type="button">End game</button>
+      <button class="btn ghost" id="newPlayers" type="button">New players</button>
+    </div>
+  </section>
+</main>
+
+<div id="toast" class="toast" role="status"></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>
