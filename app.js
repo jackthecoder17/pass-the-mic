@@ -32,6 +32,7 @@ function show(id) {
   $('#board').classList.toggle('hidden', !inGame);
   if (inGame) renderBoard();
   $('#ytwrap').classList.toggle('show', id === 'listen' || id === 'reveal');
+  $('#syncPanel').classList.add('hidden');
   scrollTo(0, 0);
 }
 
@@ -167,14 +168,18 @@ async function selectSong(x) {
   picking = true;
   $('#songStatus').textContent = `Loading “${cleanTitle(x.trackName)}”…`;
   try {
-    const lines = parseLRC(x.syncedLyrics);
-    if (lines.filter((l) => l.words.length >= 3).length < 4) throw new Error('Not enough lyrics in this one. Pick another.');
     const title = cleanTitle(x.trackName, x.artistName);
-    const r = await fetch(`/api/yt?q=${encodeURIComponent(`${x.artistName} ${title} audio`)}&dur=${Math.round(x.duration)}`);
-    const ids = ((await r.json()).results || []).map((v) => v.id);
-    if (!ids.length) throw new Error("Couldn't find that track to play. Pick another.");
-    S.song = { title, artist: x.artistName, duration: x.duration, lines, ids, idx: 0 };
-    S.offset = 0; updateSyncLabel();
+    const r = await fetch(`/api/yt?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(x.artistName)}&dur=${Math.round(x.duration)}`);
+    const vids = (await r.json()).results || [];
+    if (!vids.length) throw new Error("Couldn't find that track to play. Pick another.");
+    // the official track is the master the lyrics were timed to; use the lyric version cut to its exact length
+    const top = vids[0];
+    const lrc = top.official && Math.abs(top.seconds - x.duration) > 1.5 ? (await lyricsFor(x, title, top.seconds)) || x : x;
+    const lines = parseLRC(lrc.syncedLyrics);
+    if (lines.filter((l) => l.words.length >= 3).length < 4) throw new Error('Not enough lyrics in this one. Pick another.');
+    const ids = vids.map((v) => v.id);
+    S.song = { title, artist: x.artistName, duration: lrc.duration, lines, ids, idx: 0 };
+    S.offset = savedOffset(ids[0]); updateSyncLabel();
     await ensurePlayer();
     player.cueVideoById(ids[0]);
     const first = lines.find((l) => l.words.length);
@@ -188,6 +193,23 @@ async function selectSong(x) {
     picking = false;
   }
 }
+
+async function lyricsFor(x, title, secs) {
+  const same = S.results.find((y) => y !== x && y.syncedLyrics && y.artistName === x.artistName &&
+    cleanTitle(y.trackName, y.artistName).toLowerCase() === title.toLowerCase() && Math.abs(y.duration - secs) <= 2);
+  if (same) return same;
+  try {
+    const r = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(x.artistName)}&track_name=${encodeURIComponent(title)}&duration=${secs}`);
+    if (!r.ok) return null;
+    const y = await r.json();
+    return y.syncedLyrics ? y : null;
+  } catch { return null; }
+}
+
+// per-video sync offset, remembered on this device
+const offsetKey = (id) => 'ptm-offset:' + id;
+function savedOffset(id) { try { return Number(localStorage.getItem(offsetKey(id))) || 0; } catch { return 0; } }
+function saveOffset() { try { localStorage.setItem(offsetKey(S.song.ids[S.song.idx]), String(S.offset)); } catch {} }
 
 // ---------- YouTube ----------
 let player, playerReady;
@@ -213,6 +235,7 @@ function onYtError() {
   if (!song) return;
   if (song.idx < song.ids.length - 1) {
     song.idx++;
+    S.offset = savedOffset(song.ids[song.idx]); updateSyncLabel();
     if (S.phase === 'listen' || S.phase === 'reveal-play') {
       player.loadVideoById({ videoId: song.ids[song.idx], startSeconds: Math.max(0, S.playFrom - S.offset) });
     } else player.cueVideoById(song.ids[song.idx]);
@@ -273,7 +296,29 @@ $('#readyBtn').onclick = () => {
   playFrom(S.resumeAt);
 };
 $('#skipBtn').onclick = () => { if (S.phase === 'listen') playFrom(Math.max(S.resumeAt, S.section.start - 5)); };
-document.querySelectorAll('[data-sync]').forEach((b) => (b.onclick = () => { S.offset += +b.dataset.sync; updateSyncLabel(); }));
+document.querySelectorAll('[data-sync]').forEach((b) => (b.onclick = () => { S.offset += +b.dataset.sync; updateSyncLabel(); saveOffset(); lastKara = -2; }));
+
+// tap-to-sync: tap the line the moment the singer starts it
+$('#syncBtn').onclick = () => {
+  const L = S.song.lines, t = lyricTime();
+  let i = L.findIndex((l) => l.t > t);
+  if (i < 0) i = L.length;
+  const pick = [];
+  for (let k = Math.max(0, i - 3); k < L.length && pick.length < 6; k++) if (L[k].words.length && k < S.section.i) pick.push(k);
+  if (!pick.length) return toast('No lyrics to sync against right here. Try again in a moment.');
+  $('#syncLines').innerHTML = pick.map((k) => `<button type="button" data-line="${k}">${esc(L[k].text)}</button>`).join('');
+  $('#syncPanel').classList.remove('hidden');
+};
+$('#syncLines').onclick = (e) => {
+  const k = e.target.closest('[data-line]')?.dataset.line;
+  if (k == null) return;
+  const video = player.getCurrentTime();
+  S.offset = S.song.lines[+k].t - (video - 0.2); // ~200ms reaction time
+  updateSyncLabel(); saveOffset(); lastKara = -2;
+  $('#syncPanel').classList.add('hidden');
+  toast('Synced ✓ Saved for this song');
+};
+$('#syncClose').onclick = () => $('#syncPanel').classList.add('hidden');
 function updateSyncLabel() { $('#syncVal').textContent = S.offset ? `${S.offset > 0 ? '+' : ''}${S.offset.toFixed(1)}s` : ''; }
 
 // karaoke display + section trigger
@@ -316,7 +361,8 @@ function startTurn() {
   $('#turnName').textContent = S.players[S.cur].name;
   const cueLine = S.song.lines.slice(0, sec.i).reverse().find((l) => l.words.length);
   $('#cue').textContent = cueLine ? `“…${cueLine.text}”` : '';
-  $('#chips').innerHTML = sec.words.map((w) => `<span class="w" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
+  const hint = S.round <= 2 ? 1 : 0; // early rounds: show the first word so you know where to come in
+  $('#chips').innerHTML = sec.words.map((w, i) => `<span class="w${i < hint ? ' hint' : ''}" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
   $('#heard').textContent = '';
   $('#timerBar').style.transform = 'scaleX(1)';
   $('#doneBtn').disabled = true;

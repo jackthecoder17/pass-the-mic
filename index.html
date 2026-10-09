@@ -93,12 +93,17 @@
     <p class="listen-hint"><span class="pulse"></span><b id="listenName"></b>, stay ready… the music could stop any second</p>
     <div class="tools">
       <div class="sync">
-        <span class="muted small">Lyrics out of sync?</span>
-        <button class="chip" data-sync="-0.3" type="button">Too early</button>
-        <button class="chip" data-sync="0.3" type="button">Too late</button>
+        <button class="chip" id="syncBtn" type="button">🎯 Fix sync</button>
+        <button class="chip" data-sync="-0.3" type="button" aria-label="Lyrics are early">− 0.3s</button>
+        <button class="chip" data-sync="0.3" type="button" aria-label="Lyrics are late">+ 0.3s</button>
         <span class="muted small" id="syncVal"></span>
       </div>
       <button class="chip" id="skipBtn" type="button">Skip ahead ⏭</button>
+    </div>
+    <div id="syncPanel" class="sync-panel hidden">
+      <p><b>Tap a line the moment the singer starts it</b></p>
+      <div id="syncLines" class="sync-lines"></div>
+      <button class="chip" id="syncClose" type="button">Cancel</button>
     </div>
   </section>
 

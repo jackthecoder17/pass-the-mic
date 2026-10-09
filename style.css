@@ -119,6 +119,10 @@ select option { background: #1d1229; }
 @keyframes pulse { 50% { transform: scale(1.6); opacity: .4; } }
 .tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sync { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.sync-panel { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); width: 100%; max-width: 560px; z-index: 40; background: #1d1229; border: 1px solid var(--line); border-radius: 20px 20px 0 0; padding: 18px 16px max(18px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 12px; box-shadow: 0 -20px 50px rgba(0, 0, 0, .5); animation: enter .25s ease-out; }
+.sync-lines { display: grid; gap: 8px; }
+.sync-lines button { text-align: left; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; font-size: 15px; font-weight: 600; }
+.sync-lines button:active { background: rgba(255, 61, 139, .25); border-color: var(--pink); }
 
 /* turn */
 .go { font-family: var(--display); font-weight: 900; font-size: clamp(36px, 12vw, 64px); letter-spacing: -.02em; color: var(--fg); }
@@ -129,7 +133,8 @@ select option { background: #1d1229; }
 .w { display: inline-flex; justify-content: center; align-items: center; min-width: calc(var(--len) * .62em + 14px); height: 40px; padding: 0 10px; border-radius: 10px; border: 2px dashed rgba(255, 255, 255, .25); font-weight: 700; font-size: 17px; transition: all .25s; }
 .w b { visibility: hidden; }
 .w.ok { border: 2px solid var(--green); background: rgba(47, 227, 154, .15); color: var(--green); animation: pop .3s ease-out; }
-.w.ok b, .w.miss b, .w.show b { visibility: visible; }
+.w.hint:not(.ok):not(.miss) { border: 2px solid var(--yellow); color: var(--yellow); }
+.w.ok b, .w.miss b, .w.show b, .w.hint b { visibility: visible; }
 .w.show { border-style: solid; border-color: rgba(255, 255, 255, .4); }
 .w.miss { border: 2px solid var(--red); background: rgba(255, 77, 94, .12); color: var(--red); }
 .timer { width: 100%; max-width: 420px; height: 8px; background: var(--panel); border-radius: 99px; overflow: hidden; }
