@@ -89,7 +89,7 @@ $('#micTest').onclick = () => {
   $('#micOut').textContent = 'Listening… sing or say anything';
   let got = false;
   startRec(null, (t) => { got = !!t; $('#micOut').textContent = '✅ Heard: “' + t + '”'; });
-  setTimeout(() => { stopRec(); if (!got) $('#micOut').textContent = "Didn't hear anything. Check the mic permission and try again."; }, 4500);
+  setTimeout(() => { stopRec(); if (!got) $('#micOut').textContent = S.micBlocked ? $('#toast').textContent : "Didn't hear anything. Speak up, or check the mic permission and try again."; }, 4500);
 };
 function resetScores() {
   S.players.forEach((p) => { p.lives = S.lives; p.points = 0; p.passes = 0; });
@@ -559,7 +559,14 @@ function startRec(expected, onText) {
       onText(`${prior} ${session}`.replace(/\s+/g, ' ').trim());
     };
     r.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') { recOn = false; S.micBlocked = true; toast('Microphone blocked. Allow mic access in your browser settings.'); }
+      const why = {
+        'not-allowed': 'Microphone blocked. Click the 🔒 by the address bar → allow Microphone, then reload.',
+        'service-not-allowed': "This browser won't run speech recognition. Use Google Chrome or Safari.",
+        'audio-capture': 'No microphone found. Check one is connected and allowed in System Settings → Privacy → Microphone.',
+        'network': "This browser can't reach its speech service (common in Brave/Arc). Use Google Chrome or Safari.",
+        'language-not-supported': 'That accent setting is not supported here. Try the US accent.',
+      }[e.error];
+      if (why) { recOn = false; S.micBlocked = true; toast(why); }
     };
     r.onend = () => {
       prior = `${prior} ${session}`.trim();
