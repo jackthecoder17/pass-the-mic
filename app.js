@@ -152,6 +152,11 @@ if (!SR) { $('#srWarn').classList.remove('hidden'); $('#micTest').classList.add(
 $('#micTest').onclick = () => {
   S.lang = $('#langSel').value;
   $('#micOut').textContent = 'Listening… sing or say anything';
+  if (S.cloud) {
+    startCloudRec('', (t) => { if (t) $('#micOut').textContent = '✅ Heard: “' + t + '”'; });
+    setTimeout(() => stopCloudRec().then((t) => { $('#micOut').textContent = t ? '✅ Heard: “' + t + '”' : S.micBlocked ? 'Microphone blocked. Allow mic access for this site, then reload.' : "Didn't hear anything. Speak up and try again."; }), 4500);
+    return;
+  }
   let got = false;
   startRec(null, (t) => { got = !!t; $('#micOut').textContent = '✅ Heard: “' + t + '”'; });
   setTimeout(() => { stopRec(); if (!got) $('#micOut').textContent = S.micBlocked ? $('#toast').textContent : "Didn't hear anything. Speak up, or check the mic permission and try again."; }, 4500);
@@ -579,6 +584,10 @@ function theCut() {
   setTimeout(() => { document.body.classList.remove('cutting'); if (S.phase === 'cut') startTurn(); }, 850);
 }
 
+// timing: a 5-second count-in, then roughly twice the line's length (min 10s) to sing it
+const COUNT_IN = 5;
+const singWindow = (sec) => Math.max(10, (sec.end - sec.start) * 2 + 5);
+
 // ring timer around the singer's avatar (f: 1 = full, 0 = empty)
 const setTimer = (f) => { $('#timerBar').style.strokeDashoffset = String(390 * (1 - Math.max(0, Math.min(1, f)))); };
 
@@ -591,6 +600,8 @@ function waveLoop() {
   if (!waveOn) return;
   const bars = $('#wave').children, t = performance.now() / 1000;
   waveE *= 0.93;
+  const lvl = micLevel();
+  if (lvl !== null) waveE = Math.max(waveE, Math.min(1.4, lvl * 7));
   for (let i = 0; i < bars.length; i++) {
     const shape = Math.abs(Math.sin(i * 1.7 + t * 6)) * 0.7 + Math.abs(Math.sin(i * 0.6 - t * 9)) * 0.3;
     bars[i].style.height = `${6 + (8 + 42 * shape) * Math.min(1, 0.12 + waveE)}px`;
@@ -621,32 +632,39 @@ function startTurn() {
   if (S.net && !isMe(S.cur)) return spectate();
 
   const go = $('#goTxt');
-  const steps = ['3', '2', '1'];
-  let n = 0;
-  go.className = 'go'; go.textContent = 'YOUR TURN';
+  let n = COUNT_IN;
+  $('#turnName').textContent = `${p.name} · your turn in`;
+  go.className = 'go count'; go.textContent = String(n);
   sfx.tick();
   clearInterval(countT);
   countT = setInterval(() => {
-    if (n < steps.length) { go.className = 'go count'; void go.offsetWidth; go.textContent = steps[n++]; sfx.tick(); return; }
+    if (--n > 0) { go.className = 'go'; void go.offsetWidth; go.className = 'go count'; go.textContent = String(n); sfx.tick(); return; }
     clearInterval(countT);
+    $('#turnName').textContent = `${p.name} · go!`;
     go.className = 'go sing'; go.textContent = 'SING!'; sfx.go(); buzz(80);
     beginListening();
-  }, 520);
+  }, 1000);
 }
 
 function beginListening() {
   const sec = S.section;
   const expected = sec.words.map((w) => w.n);
-  const dur = Math.max(5, (sec.end - sec.start) * 1.35 + 2.5);
+  const dur = singWindow(sec);
   S.heard = '';
-  startRec(expected, (text) => {
+  let allIn = false;
+  const onText = (text) => {
+    if (S.phase !== 'turn') return;
     S.heard = text;
     const sims = align(expected, tokenize(text).map((w) => w.n)).sims;
     paintChips('#chips', sims, false);
     $('#heard').textContent = text ? `👂 “${text}”` : '';
     kickWave(0.7);
     if (S.net) sendLive(sims, text);
-  });
+    // every word caught: wrap up on our own instead of waiting out the clock
+    if (!allIn && sims.length && sims.every((x) => x > 0)) { allIn = true; setTimeout(finishTurn, 1400); }
+  };
+  S.turnCloud = S.cloud && !!window.MediaRecorder;
+  if (S.turnCloud) startCloudRec(cloudPrompt(sec), onText); else startRec(expected, onText);
   $('#doneBtn').disabled = false;
   const t0 = performance.now();
   clearInterval(turnTimer);
@@ -673,8 +691,12 @@ function finishTurn() {
   clearInterval(turnTimer); clearInterval(countT);
   $('#doneBtn').disabled = true;
   $('#goTxt').className = 'go'; $('#goTxt').textContent = 'SCORING…';
-  stopRec();
-  setTimeout(scoreTurn, 800); // let the recognizer flush its final words
+  if (S.turnCloud) {
+    stopCloudRec().then((text) => { if (text) S.heard = text; scoreTurn(); });
+  } else {
+    stopRec();
+    setTimeout(scoreTurn, 800); // let the recognizer flush its final words
+  }
 }
 
 function scoreTurn() {
@@ -682,7 +704,7 @@ function scoreTurn() {
   const sec = S.section;
   const r = align(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n));
   const pct = Math.round(r.score * 100);
-  const noMic = !SR || S.micBlocked;
+  const noMic = S.turnCloud ? S.micBlocked || (S.cloudFailed && !S.heard) : !SR || S.micBlocked;
   if (S.net) {
     const res = { pct, sims: r.sims, heard: S.heard, noMic };
     S.phase = 'waiting';
@@ -1077,7 +1099,8 @@ $('#readyUp').onclick = async () => {
   unlockAudio();
   S.lang = $('#lobbyLang').value;
   primePlayer();
-  if (SR) { startRec(null, () => {}); setTimeout(stopRec, 1500); }
+  if (S.cloud) navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => s.getTracks().forEach((t) => t.stop())).catch(() => toast('Allow microphone access so you can sing your turns.'));
+  else if (SR) { startRec(null, () => {}); setTimeout(stopRec, 1500); }
   $('#readyUp').classList.add('on'); $('#readyUp').textContent = '✓ Ready! Sound and mic are on';
   S.net?.track({ ready: true });
 };
@@ -1249,7 +1272,7 @@ function spectate() {
   const go = $('#goTxt');
   go.className = 'go count'; go.textContent = 'IS SINGING';
   sfx.go();
-  const sec = S.section, dur = Math.max(5, (sec.end - sec.start) * 1.35 + 2.5) + 2.4, t0 = performance.now();
+  const sec = S.section, dur = singWindow(sec) + COUNT_IN + 0.5, t0 = performance.now();
   clearInterval(specT);
   specT = setInterval(() => {
     const f = 1 - (performance.now() - t0) / 1000 / dur;
@@ -1383,6 +1406,84 @@ function startRec(expected, onText) {
 function stopRec() {
   recOn = false;
   try { rec?.stop(); } catch {}
+  if (cRec) stopCloudRec(true);
+}
+
+// ---------- cloud ears: Whisper via /api/transcribe ----------
+// Records the turn and re-transcribes the growing clip every ~2.5s for live feedback, then once more
+// in full when the turn ends. Much better than the browser recognizer on singing, accents and Pidgin,
+// and works in every browser. Off (falls back to the browser recognizer) until GROQ_API_KEY is set.
+S.cloud = false;
+fetch('/api/transcribe?ping=1').then((r) => (r.ok ? r.json() : null)).then((j) => {
+  S.cloud = !!j?.ok && !!window.MediaRecorder && !!navigator.mediaDevices?.getUserMedia;
+  if (S.cloud) { $('#srWarn').classList.add('hidden'); $('#micTest').classList.remove('hidden'); }
+}).catch(() => {});
+
+let cRec = null;
+const recMime = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || '';
+// Whisper's prompt = what was sung just before, so it hears the song's words and spelling without being told the answer
+function cloudPrompt(sec) {
+  const before = S.song.lines.slice(Math.max(0, sec.i - 4), sec.i).map((l) => l.text).filter(Boolean).join(' ');
+  return `${S.song.title} by ${S.song.artist}. ${before}`.slice(0, 500);
+}
+async function transcribe(blob, prompt) {
+  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', 'x-prompt': encodeURIComponent(prompt || '') }, body: blob });
+  if (!r.ok) throw new Error(`transcribe ${r.status}`);
+  return (await r.json()).text || '';
+}
+async function startCloudRec(prompt, onText) {
+  if (cRec) stopCloudRec(true);
+  S.micBlocked = false; S.cloudFailed = false;
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+  catch { S.micBlocked = true; toast('Microphone blocked. Allow mic access for this site in your browser settings, then reload.'); return; }
+  const mime = recMime();
+  const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  const st = { stream, mr, chunks: [], mime: mr.mimeType || mime || 'audio/webm', inflight: false, sent: 0, text: '', ok: 0, onText, prompt };
+  cRec = st;
+  try { unlockAudio(); st.src = ac.createMediaStreamSource(stream); st.an = ac.createAnalyser(); st.an.fftSize = 512; st.src.connect(st.an); } catch {}
+  mr.ondataavailable = (e) => { if (e.data.size) st.chunks.push(e.data); };
+  mr.start(400);
+  st.timer = setInterval(() => pump(st), 2500);
+}
+async function pump(st, final = false) {
+  if (st.inflight && !final) return;
+  const size = st.chunks.reduce((n, c) => n + c.size, 0);
+  if (!final && size - st.sent < 8000) return; // nothing new worth sending yet
+  st.inflight = true; st.sent = size;
+  try {
+    const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt);
+    st.ok++;
+    if (text || final) { st.text = text || st.text; if (cRec === st || final) st.onText(st.text); }
+  } catch (e) { console.warn(e); }
+  finally { st.inflight = false; }
+}
+// stop recording; resolves with the transcript of the whole clip (abort: just stop)
+function stopCloudRec(abort = false) {
+  const st = cRec;
+  if (!st) return Promise.resolve('');
+  cRec = null; clearInterval(st.timer);
+  return new Promise((resolve) => {
+    const finish = async () => {
+      st.stream.getTracks().forEach((t) => t.stop());
+      try { st.src?.disconnect(); } catch {}
+      if (abort) return resolve('');
+      const work = (async () => { while (st.inflight) await new Promise((r) => setTimeout(r, 80)); await pump(st, true); })();
+      await Promise.race([work, new Promise((r) => setTimeout(r, 7000))]);
+      S.cloudFailed = st.ok === 0;
+      resolve(st.text);
+    };
+    if (st.mr.state !== 'inactive') { st.mr.onstop = finish; st.mr.stop(); } else finish();
+  });
+}
+function micLevel() {
+  const an = cRec?.an;
+  if (!an) return null;
+  const d = new Uint8Array(an.fftSize);
+  an.getByteTimeDomainData(d);
+  let sum = 0;
+  for (const v of d) { const x = (v - 128) / 128; sum += x * x; }
+  return Math.sqrt(sum / d.length);
 }
 
 // ---------- confetti ----------
