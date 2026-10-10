@@ -313,6 +313,11 @@ body.cutting #app { animation: shake .45s; }
 .st .delta { font: 800 11px var(--body); color: var(--green); }
 .st.out { opacity: .45; }
 #contBtn { max-width: 420px; }
+/* auto-continue: the button fills up over 5s */
+.btn.hot.counting { background-image: linear-gradient(90deg, rgba(255, 255, 255, .38), rgba(255, 255, 255, .38)), linear-gradient(180deg, #ffc23d, #ff6b1a); background-repeat: no-repeat; background-size: 0% 100%, 100% 100%; animation: fillbar 5s linear forwards; white-space: pre; }
+@keyframes fillbar { to { background-size: 100% 100%, 100% 100%; } }
+.hold { border: 0; background: none; color: var(--dim); font-weight: 700; font-size: 14px; padding: 4px 10px; }
+.hold:hover { color: var(--cream); }
 .replay-box { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 8px; }
 
 /* end */
@@ -327,11 +332,15 @@ body.cutting #app { animation: shake .45s; }
 .rank .stt { color: var(--dim); font-size: 12.5px; font-weight: 600; text-align: right; }
 #s-end .col { max-width: 420px; }
 
+/* keyboard focus */
+:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.btn:focus-visible, .chip:focus-visible, .pack:focus-visible { outline-offset: 3px; }
+
 /* menu sheet + toast */
 .sheet { position: fixed; inset: 0; z-index: 70; background: rgba(8, 4, 2, .75); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: flex; align-items: flex-end; justify-content: center; animation: enter .2s ease-out; }
 .sheet-card { width: 100%; max-width: 520px; background: #241611; border: 1px solid var(--line); border-radius: 24px 24px 0 0; padding: 22px 16px max(22px, env(safe-area-inset-bottom)); display: flex; flex-direction: column; gap: 10px; }
 .sheet-card .kicker { text-align: center; margin-bottom: 4px; }
 @media (min-width: 600px) { .sheet { align-items: center; } .sheet-card { border-radius: 24px; max-width: 420px; } }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); background: #2e1d15; border: 1px solid var(--line); padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: all .3s; z-index: 80; max-width: calc(100vw - 32px); }
+.toast { position: fixed; left: 50%; top: max(14px, env(safe-area-inset-top)); transform: translate(-50%, -20px); box-shadow: 0 14px 30px rgba(0, 0, 0, .5); background: #2e1d15; border: 1px solid var(--line); padding: 12px 16px; border-radius: 14px; font-size: 14px; font-weight: 600; opacity: 0; pointer-events: none; transition: all .3s; z-index: 80; max-width: calc(100vw - 32px); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; } }

@@ -32,11 +32,31 @@ function show(id) {
   $('#board').classList.toggle('hidden', !inGame);
   if (inGame) renderBoard();
   $('#syncPanel').classList.add('hidden');
+  if (id !== 'reveal') stopAutoNext();
+  keepAwake(inGame || id === 'lobby');
   // keep one history entry above the app so the phone's back button opens our menu instead of leaving
   if (id !== 'home' && history.state?.ptm !== 'guard') history.pushState({ ptm: 'guard' }, '');
   scrollTo(0, 0);
   requestAnimationFrame(placeTV);
 }
+// keep the screen on during a game (phones lock while you're listening or passing the phone around)
+let wakeLock = null, wantAwake = false;
+async function keepAwake(on) {
+  wantAwake = on;
+  try {
+    if (on && !wakeLock && 'wakeLock' in navigator && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } else if (!on && wakeLock) { const w = wakeLock; wakeLock = null; await w.release(); }
+  } catch {}
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { if (wantAwake) keepAwake(true); return; }
+  // one-phone game: switching apps pauses everything; Resume picks up where you left off
+  if (!S.net && ['countin', 'listen', 'cut', 'turn', 'scoring', 'reveal-play', 'reveal'].includes(S.phase)) openMenu();
+  else if (!S.net && $('#s-reveal').classList.contains('active')) openMenu();
+});
+
 // the YouTube iframe can't be moved in the DOM (it would reload), so it floats over the visible .tv-slot
 function placeTV() {
   const wrap = $('#ytwrap'), slot = document.querySelector('.screen.active .tv-slot');
@@ -106,10 +126,11 @@ const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
 
 // ---------- players ----------
 function renderPlayers() {
-  $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}${esc(p.name)}<button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('');
+  $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}${esc(p.name)}<button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('') +
+    (S.players.length < 12 ? `<li class="empty"><span class="av lg">＋</span><span class="tag">${S.players.length ? 'add another' : 'add players above'}</span></li>` : '');
   $('#toSong').disabled = !S.players.length;
 }
-$('#startBtn').onclick = () => { unlockAudio(); show('players'); $('#nameIn').focus(); };
+$('#startBtn').onclick = () => { unlockAudio(); renderPlayers(); show('players'); $('#nameIn').focus(); };
 $('#addForm').onsubmit = (e) => {
   e.preventDefault();
   const name = $('#nameIn').value.trim();
@@ -165,7 +186,11 @@ $('#packs').onclick = (e) => {
 };
 
 async function startPack(key) {
-  if (picking) return;
+  if (picking || loadingSong) return;
+  picking = true; // live charts load over the network first; ignore extra taps meanwhile
+  try { await loadPack(key); } finally { picking = false; }
+}
+async function loadPack(key) {
   const live = PACKS.live.find((p) => p.id === key);
   let name, songs;
   $('#songStatus').textContent = 'Shuffling the pack…';
@@ -186,21 +211,27 @@ async function startPack(key) {
 }
 
 // load the next playable song from the queue (skipping any that fail) and hand over
+let loadingSong = false;
 async function nextPackSong() {
+  if (loadingSong) return; // double taps / overlapping triggers load one song, not two
+  loadingSong = true;
   S.songTurns = 0;
   showLoading();
-  while (S.qi < S.queue.length) {
-    const item = S.queue[S.qi++];
-    try {
-      const song = item.picked ? item.song : item.live ? await resolveLive(item) : await resolvePacked(item);
-      if (song) {
-        await setSong(song, !!item.picked);
-        goHandoff();
-        if (song.warn) toast(SYNC_WARN);
-        return;
-      }
-    } catch (e) { console.warn('skipping', item.t, e); }
-  }
+  try {
+    while (S.qi < S.queue.length) {
+      const item = S.queue[S.qi++];
+      try {
+        const song = item.picked ? item.song : item.live ? await resolveLive(item) : await resolvePacked(item);
+        if (song) {
+          await setSong(song, !!item.picked);
+          loadingSong = false;
+          goHandoff();
+          if (song.warn) toast(SYNC_WARN);
+          return;
+        }
+      } catch (e) { console.warn('skipping', item.t, e); }
+    }
+  } finally { loadingSong = false; }
   endGame(`${S.pack} finished`);
 }
 async function resolvePacked(item) {
@@ -641,6 +672,7 @@ function finishTurn() {
   stopWave();
   clearInterval(turnTimer); clearInterval(countT);
   $('#doneBtn').disabled = true;
+  $('#goTxt').className = 'go'; $('#goTxt').textContent = 'SCORING…';
   stopRec();
   setTimeout(scoreTurn, 800); // let the recognizer flush its final words
 }
@@ -742,7 +774,43 @@ function showVerdict(pass) {
   $('#contBtn').classList.toggle('hidden', !canContinue);
   $('#waitHost').classList.toggle('hidden', canContinue);
   renderBoard();
+  if (canContinue) startAutoNext();
 }
+
+// what the Continue button leads to (mirrors the #contBtn logic, without changing anything)
+function upcoming() {
+  const solo = S.players.length === 1, left = alive().length;
+  const standing = S.players.filter((p) => p.lives > 0).length;
+  if ((solo && standing === 0) || (!solo && standing <= 1) || left === 0) return { kind: 'end', label: 'SEE RESULTS 🏆' };
+  if (S.mode === 'pack' && S.songTurns + 1 >= left) return { kind: 'song', label: 'NEXT SONG 🎵' };
+  const n = nextAlive(S.cur);
+  return { kind: 'next', label: n === S.cur ? 'GO AGAIN →' : `NEXT: ${S.players[n].name.toUpperCase()} →` };
+}
+// the game keeps moving: Continue fires by itself after 5s unless someone taps "Hold on"
+const AUTO_SECS = 5;
+let autoT = null, autoLeft = 0;
+function startAutoNext() {
+  stopAutoNext();
+  const btn = $('#contBtn'), label = upcoming().label;
+  autoLeft = AUTO_SECS;
+  btn.textContent = `${label}  ${autoLeft}`;
+  btn.classList.remove('counting'); void btn.offsetWidth; btn.classList.add('counting');
+  $('#holdBtn').classList.remove('hidden');
+  autoT = setInterval(() => {
+    if (!$('#menu').classList.contains('hidden')) return; // paused while the menu is open
+    if (--autoLeft <= 0) { stopAutoNext(); btn.click(); return; }
+    btn.textContent = `${label}  ${autoLeft}`;
+  }, 1000);
+}
+function stopAutoNext() {
+  if (autoT) clearInterval(autoT);
+  autoT = null;
+  const btn = $('#contBtn');
+  btn.classList.remove('counting');
+  if (S.players.length && S.section) btn.textContent = upcoming().label;
+  $('#holdBtn').classList.add('hidden');
+}
+$('#holdBtn').onclick = () => { stopAutoNext(); toast('Take your time. Tap the button when you\'re ready'); };
 function applyVerdict(pass) {
   applyResult(pass, S.result.pct);
   showVerdict(pass);
@@ -751,6 +819,8 @@ $('#votePass').onclick = () => (S.net ? castVote(true) : applyVerdict(true));
 $('#voteFail').onclick = () => (S.net ? castVote(false) : applyVerdict(false));
 
 $('#contBtn').onclick = () => {
+  if ($('#s-reveal').classList.contains('active') === false) return;
+  stopAutoNext();
   player.pauseVideo();
   S.phase = 'idle';
   S.resumeAt = S.section.end;
@@ -844,6 +914,7 @@ $('#board').onclick = (e) => { if (e.target.closest('[data-menu]')) openMenu(); 
 let pausedPhase = null;
 function openMenu() {
   if (!$('#menu').classList.contains('hidden')) return;
+  if (autoT) stopAutoNext(); // a pause shouldn't skip the next singer behind your back
   if (S.net) { // online: the game keeps going for everyone; host gets controls, guests can leave
     const host = S.net.host;
     $('#menuTitle').textContent = `Room ${S.net.code}`;
@@ -865,7 +936,11 @@ function openMenu() {
   $('#mSkip').classList.toggle('hidden', !S.song);
   $('#menu').classList.remove('hidden');
 }
-function closeMenu() { $('#menu').classList.add('hidden'); }
+function closeMenu() {
+  $('#menu').classList.add('hidden');
+  // back on the reveal with the verdict in: restart the countdown
+  setTimeout(() => { if ($('#s-reveal').classList.contains('active') && !$('#contBtn').classList.contains('hidden') && !autoT) startAutoNext(); }, 0);
+}
 $('#mResume').onclick = () => {
   closeMenu();
   const p = pausedPhase; pausedPhase = null;
