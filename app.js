@@ -1,17 +1,15 @@
 import { tokenize, align } from './match.js';
+import { resolveSong } from './resolve.js';
 
 const $ = (s) => document.querySelector(s);
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-const QUICK = [
-  ['Last Last', 'Burna Boy'], ['Calm Down', 'Rema'], ['Essence', 'Wizkid'], ['Love Nwantiti', 'CKay'],
-  ['Shape of You', 'Ed Sheeran'], ['Someone Like You', 'Adele'], ['Blinding Lights', 'The Weeknd'], ['Fall', 'Davido'],
-];
 
 const S = {
   players: [], lives: 3, lang: 'en-US',
   song: null, offset: 0,
   cur: 0, round: 1, resumeAt: 0, section: null,
   phase: 'idle', heard: '', result: null, results: [],
+  mode: 'single', pack: null, queue: [], qi: 0, songTurns: 0, // pack mode: one round per song, then the next song
 };
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -102,17 +100,79 @@ $('#toSong').onclick = () => {
   show('song');
 };
 
-// ---------- song search ----------
-$('#quick').innerHTML = QUICK.map(([t, a], i) => `<button class="chip" type="button" data-q="${i}">${esc(t)} · ${esc(a)}</button>`).join('');
-$('#quick').onclick = async (e) => {
-  const i = e.target.closest('[data-q]')?.dataset.q;
-  if (i == null) return;
-  const [t, a] = QUICK[i];
-  $('#q').value = `${t} ${a}`;
-  const list = await search(`${t} ${a}`);
-  const hit = list.find((x) => x.artistName.toLowerCase().includes(a.toLowerCase()) && x.trackName.toLowerCase().includes(t.toLowerCase()));
-  if (hit) selectSong(hit);
+// ---------- song packs ----------
+let PACKS = { live: [], packs: [] };
+const shuffle = (a) => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+fetch('packs.json').then((r) => r.json()).then((d) => { PACKS = d; renderPacks(); }).catch(() => toast("Couldn't load song packs. You can still search."));
+function renderPacks() {
+  const all = PACKS.packs.reduce((n, p) => n + p.songs.length, 0);
+  const card = (key, emoji, name, blurb, tag) =>
+    `<button class="pack" type="button" data-pack="${key}"><span class="pe">${emoji}</span><b>${esc(name)}</b><span class="pb">${esc(blurb)}</span><span class="pt">${tag}</span></button>`;
+  $('#packs').innerHTML =
+    card('mix', '🎲', 'Mix Everything', 'Every genre, shuffled', `${all} songs`) +
+    PACKS.live.map((p) => card(p.id, p.emoji, p.name, p.blurb, '<i class="live"></i>LIVE')).join('') +
+    PACKS.packs.map((p) => card(p.id, p.emoji, p.name, p.blurb, `${p.songs.length} songs`)).join('');
+}
+$('#packs').onclick = (e) => {
+  const key = e.target.closest('[data-pack]')?.dataset.pack;
+  if (key) startPack(key);
 };
+
+async function startPack(key) {
+  if (picking) return;
+  const live = PACKS.live.find((p) => p.id === key);
+  let name, songs;
+  $('#songStatus').textContent = 'Shuffling the pack…';
+  if (key === 'mix') { name = 'Mix Everything'; songs = PACKS.packs.flatMap((p) => p.songs); }
+  else if (live) {
+    name = live.name;
+    try {
+      const r = await fetch(`/api/chart?country=${live.country}`);
+      songs = ((await r.json()).songs || []).map((x) => ({ t: x.title, a: x.artist, live: true }));
+    } catch { songs = []; }
+    if (!songs.length) { $('#songStatus').textContent = "Couldn't load the live chart right now. Try another pack."; return; }
+  } else { const p = PACKS.packs.find((x) => x.id === key); name = p.name; songs = p.songs; }
+  // live charts: keep chart order loosely (hits first) but mix it up a bit
+  S.queue = live ? shuffle(songs.slice(0, 20)).concat(shuffle(songs.slice(20))) : shuffle(songs);
+  S.qi = 0; S.mode = 'pack'; S.pack = name;
+  $('#songStatus').textContent = '';
+  nextPackSong();
+}
+
+// load the next playable song from the queue (skipping any that fail) and hand over
+async function nextPackSong() {
+  S.songTurns = 0;
+  showLoading();
+  while (S.qi < S.queue.length) {
+    const item = S.queue[S.qi++];
+    try {
+      const song = item.live ? await resolveLive(item) : await resolvePacked(item);
+      if (song) { await setSong(song); return goHandoff(); }
+    } catch (e) { console.warn('skipping', item.t, e); }
+  }
+  endGame(`${S.pack} finished`);
+}
+async function resolvePacked(item) {
+  const r = await fetch(`https://lrclib.net/api/get/${item.l}`);
+  if (!r.ok) return null;
+  const y = await r.json();
+  return y.syncedLyrics ? { title: item.t, artist: item.a, lyrics: y.syncedLyrics, ids: item.v } : null;
+}
+async function resolveLive(item) {
+  const find = (title, artist, dur) => fetch(`/api/yt?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&dur=${dur}`).then((r) => r.json()).then((j) => j.results || []);
+  const s = await resolveSong(item.t, item.a, find);
+  if (!s || !s.official || s.delta > 2) return null; // only songs we can keep in sync
+  return { title: item.t, artist: item.a, lyrics: s.lyrics, ids: s.v };
+}
+function showLoading() {
+  $('#roundInfo').textContent = S.pack || '';
+  $('#handName').textContent = S.players[S.cur]?.name || '';
+  $('#handSong').textContent = 'Loading the next song…';
+  $('#readyBtn').disabled = true;
+  show('handoff');
+}
+
+// ---------- song search ----------
 $('#searchForm').onsubmit = (e) => { e.preventDefault(); const q = $('#q').value.trim(); if (q) search(q); };
 $('#results').onclick = (e) => {
   const i = e.target.closest('[data-i]')?.dataset.i;
@@ -175,16 +235,8 @@ async function selectSong(x) {
     // the official track is the master the lyrics were timed to; use the lyric version cut to its exact length
     const top = vids[0];
     const lrc = top.official && Math.abs(top.seconds - x.duration) > 1.5 ? (await lyricsFor(x, title, top.seconds)) || x : x;
-    const lines = parseLRC(lrc.syncedLyrics);
-    if (lines.filter((l) => l.words.length >= 3).length < 4) throw new Error('Not enough lyrics in this one. Pick another.');
-    const ids = vids.map((v) => v.id);
-    S.song = { title, artist: x.artistName, duration: lrc.duration, lines, ids, idx: 0 };
-    S.offset = savedOffset(ids[0]); updateSyncLabel();
-    await ensurePlayer();
-    player.cueVideoById(ids[0]);
-    const first = lines.find((l) => l.words.length);
-    S.resumeAt = Math.max(0, (first?.t ?? 0) - 4);
-    if (S.players[S.cur]?.lives <= 0) S.cur = nextAlive(S.cur);
+    S.mode = 'single'; S.pack = null;
+    await setSong({ title, artist: x.artistName, lyrics: lrc.syncedLyrics, ids: vids.map((v) => v.id) }, true);
     $('#songStatus').textContent = '';
     goHandoff();
   } catch (e) {
@@ -192,6 +244,21 @@ async function selectSong(x) {
   } finally {
     picking = false;
   }
+}
+
+async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
+  const lines = parseLRC(lyrics);
+  const sung = lines.filter((l) => l.words.length >= 3);
+  if (sung.length < 4) throw new Error('Not enough lyrics in this one. Pick another.');
+  S.song = { title, artist, lines, ids, idx: 0 };
+  S.offset = savedOffset(ids[0]); updateSyncLabel();
+  await ensurePlayer();
+  player.cueVideoById(ids[0]);
+  // packs drop you in somewhere in the first half so every song feels different
+  const from = fromStart ? sung[0] : sung[(Math.random() * Math.max(1, sung.length * 0.4)) | 0];
+  S.resumeAt = Math.max(0, from.t - 4);
+  S.songTurns = 0;
+  if (S.players[S.cur]?.lives <= 0) S.cur = nextAlive(S.cur);
 }
 
 async function lyricsFor(x, title, secs) {
@@ -240,9 +307,9 @@ function onYtError() {
       player.loadVideoById({ videoId: song.ids[song.idx], startSeconds: Math.max(0, S.playFrom - S.offset) });
     } else player.cueVideoById(song.ids[song.idx]);
   } else {
-    toast("This song won't play here. Pick another one.");
+    toast("This song won't play here. Skipping it.");
     S.phase = 'idle';
-    show('song');
+    if (S.mode === 'pack') nextPackSong(); else show('song');
   }
 }
 function onYtState(e) {
@@ -264,6 +331,8 @@ function nextAlive(i) {
 function goHandoff() {
   $('#roundInfo').textContent = `Round ${S.round} · pass mark ${passMark()}%`;
   $('#handName').textContent = S.players[S.cur].name;
+  $('#handSong').textContent = S.songTurns === 0 ? `🎵 ${S.mode === 'pack' ? 'Next song' : 'Song'}: ${S.song.title} · ${S.song.artist}` : '';
+  $('#readyBtn').disabled = false;
   show('handoff');
 }
 
@@ -488,6 +557,8 @@ $('#contBtn').onclick = () => {
   const prev = S.cur;
   S.cur = nextAlive(S.cur);
   if (S.cur <= prev) S.round++;
+  S.songTurns++;
+  if (S.mode === 'pack' && S.songTurns >= left) return nextPackSong(); // everyone had a go: next song
   goHandoff();
 };
 
@@ -507,16 +578,17 @@ function endButtons(isFinal) {
 function songOver() {
   S.phase = 'idle';
   player?.pauseVideo?.();
+  if (S.mode === 'pack') return nextPackSong();
   $('#endKicker').textContent = 'Song over 🎵';
   $('#endTitle').textContent = alive().length ? 'Still standing' : 'Everyone is out';
   renderRank(); endButtons(false);
   show('end');
 }
-function endGame() {
+function endGame(kicker = 'Game over') {
   S.phase = 'idle';
   player?.pauseVideo?.();
   const top = standings()[0];
-  $('#endKicker').textContent = 'Game over';
+  $('#endKicker').textContent = typeof kicker === 'string' ? kicker : 'Game over';
   $('#endTitle').textContent = S.players.length === 1 ? `${top.points} points` : `👑 ${top.name} wins!`;
   renderRank(); endButtons(true);
   show('end');

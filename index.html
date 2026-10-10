@@ -63,20 +63,22 @@
 
   <!-- SONG -->
   <section id="s-song" class="screen">
-    <h2>Pick a song</h2>
+    <h2>Pick a vibe</h2>
+    <p class="muted small">Each song lasts one round, then the next one in the pack starts.</p>
+    <p id="songStatus" class="status"></p>
+    <div id="packs" class="packs"></div>
+    <h3>Or play one specific song</h3>
     <form id="searchForm" class="row">
       <input id="q" placeholder="Song or artist…" autocomplete="off" enterkeyhint="search">
       <button class="btn" type="submit">Search</button>
     </form>
-    <p class="muted small">Or try one of these:</p>
-    <div id="quick" class="quick"></div>
-    <p id="songStatus" class="status"></p>
     <ul id="results" class="results"></ul>
   </section>
 
   <!-- HANDOFF -->
   <section id="s-handoff" class="screen center">
     <p class="kicker" id="roundInfo"></p>
+    <p class="next-song" id="handSong"></p>
     <p class="muted">Pass the phone to</p>
     <div class="who" id="handName"></div>
     <p class="muted small narrow">Listen closely. When the music stops, it's your turn to carry on.</p>
