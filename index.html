@@ -39,6 +39,7 @@
 
   <!-- PLAYERS -->
   <section id="s-players" class="screen">
+    <div class="topbar"><button class="back" type="button" id="playersBack">← Home</button></div>
     <h2>Who's playing?</h2>
     <form id="addForm" class="row">
       <input id="nameIn" placeholder="Player name" maxlength="14" autocomplete="off" enterkeyhint="done">
@@ -63,6 +64,7 @@
 
   <!-- SONG -->
   <section id="s-song" class="screen">
+    <div class="topbar"><button class="back" type="button" id="songBack">← Players</button></div>
     <h2>Pick the music</h2>
     <form id="searchForm" class="row">
       <input id="q" placeholder="Search any song or artist…" autocomplete="off" enterkeyhint="search">
@@ -156,10 +158,21 @@
       <button class="btn big" id="again" type="button">Play again 🔁</button>
       <button class="btn ghost" id="endGame" type="button">End game</button>
       <button class="btn ghost" id="newPlayers" type="button">New players</button>
+      <button class="btn ghost" id="endHome" type="button">🏠 Home</button>
     </div>
   </section>
 </main>
 
+<div id="menu" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
+  <div class="sheet-card">
+    <p class="kicker" id="menuTitle">Game paused</p>
+    <button class="btn big" id="mResume" type="button">▶ Resume</button>
+    <button class="btn ghost" id="mSkip" type="button">⏭ Skip this song</button>
+    <button class="btn ghost" id="mChange" type="button">🎵 Change music</button>
+    <button class="btn ghost" id="mEnd" type="button">🏁 End game &amp; see results</button>
+    <button class="btn ghost danger" id="mQuit" type="button">🚪 Quit to home</button>
+  </div>
+</div>
 <div id="toast" class="toast" role="status"></div>
 <script type="module" src="app.js"></script>
 </body>

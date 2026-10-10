@@ -31,12 +31,15 @@ function show(id) {
   if (inGame) renderBoard();
   $('#ytwrap').classList.toggle('show', id === 'listen' || id === 'reveal');
   $('#syncPanel').classList.add('hidden');
+  // keep one history entry above the app so the phone's back button opens our menu instead of leaving
+  if (id !== 'home' && history.state?.ptm !== 'guard') history.pushState({ ptm: 'guard' }, '');
   scrollTo(0, 0);
 }
 
 function renderBoard() {
   $('#board').innerHTML =
-    `<div class="songname">🎵 ${S.song ? esc(S.song.title) + ' · ' + esc(S.song.artist) : ''}</div>` +
+    `<div class="board-top"><div class="songname">🎵 ${S.song ? esc(S.song.title) + ' · ' + esc(S.song.artist) : ''}</div>` +
+    `<button class="menu-btn" type="button" data-menu aria-label="Pause menu">☰ Menu</button></div>` +
     `<div class="pl">${S.players.map((p, i) => `<span class="pc ${i === S.cur ? 'cur' : ''} ${p.lives <= 0 ? 'out' : ''}"><b>${esc(p.name)}</b><span class="hearts">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span></span>`).join('')}</div>`;
 }
 
@@ -96,7 +99,7 @@ function resetScores() {
 $('#toSong').onclick = () => {
   unlockAudio();
   S.lives = +$('#livesSel').value; S.lang = $('#langSel').value;
-  resetScores();
+  resetScores(); S.midGame = false;
   show('song');
 };
 
@@ -539,6 +542,7 @@ function finishTurn() {
 }
 
 function scoreTurn() {
+  if (S.phase !== 'scoring') return; // paused or quit meanwhile
   const sec = S.section;
   const r = align(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n));
   const pct = Math.round(r.score * 100);
@@ -645,7 +649,53 @@ function endGame(kicker = 'Game over') {
 }
 $('#nextSong').onclick = () => { S.song = null; S.cur = nextAlive(S.cur); show('song'); };
 $('#endGame').onclick = endGame;
-$('#again').onclick = () => { resetScores(); show('song'); };
+$('#again').onclick = () => { resetScores(); S.midGame = false; show('song'); };
+$('#endHome').onclick = () => quitToHome();
+
+// ---------- navigation & pause menu ----------
+$('#playersBack').onclick = () => show('home');
+$('#songBack').onclick = () => (S.midGame && S.song ? goHandoff() : show('players'));
+$('#board').onclick = (e) => { if (e.target.closest('[data-menu]')) openMenu(); };
+
+let pausedPhase = null;
+function openMenu() {
+  if (!$('#menu').classList.contains('hidden')) return;
+  pausedPhase = S.phase;
+  player?.pauseVideo?.();
+  if (S.phase === 'turn' || S.phase === 'scoring') { clearInterval(turnTimer); clearInterval(countT); stopRec(); }
+  S.phase = 'paused';
+  $('#mSkip').classList.toggle('hidden', !S.song);
+  $('#menu').classList.remove('hidden');
+}
+function closeMenu() { $('#menu').classList.add('hidden'); }
+$('#mResume').onclick = () => {
+  closeMenu();
+  const p = pausedPhase; pausedPhase = null;
+  if (p === 'listen' || p === 'reveal-play') { S.phase = p; player.playVideo(); }
+  else if (p === 'turn' || p === 'scoring') startTurn(); // a fresh attempt at the same lines
+  else S.phase = p || 'idle';
+};
+$('#mSkip').onclick = () => { closeMenu(); pausedPhase = null; skipSong(); };
+$('#mChange').onclick = () => { closeMenu(); pausedPhase = null; S.phase = 'idle'; S.midGame = true; show('song'); };
+$('#mEnd').onclick = () => { closeMenu(); pausedPhase = null; endGame(); };
+$('#mQuit').onclick = () => { closeMenu(); pausedPhase = null; quitToHome(); };
+function quitToHome() {
+  stopRec(); clearInterval(turnTimer); clearInterval(countT);
+  player?.pauseVideo?.();
+  S.phase = 'idle'; S.song = null; S.midGame = false;
+  show('home');
+}
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#board').classList.contains('hidden')) openMenu(); });
+
+// phone / browser back button
+addEventListener('popstate', () => {
+  const cur = document.querySelector('.screen.active').id.slice(2);
+  if (['handoff', 'listen', 'turn', 'reveal'].includes(cur)) {
+    if ($('#menu').classList.contains('hidden')) openMenu(); else $('#mResume').click();
+    history.pushState({ ptm: 'guard' }, '');
+  } else if (cur === 'song') $('#songBack').click();
+  else if (cur !== 'home') show('home');
+});
 $('#newPlayers').onclick = () => { renderPlayers(); show('players'); };
 
 // ---------- speech recognition ----------
