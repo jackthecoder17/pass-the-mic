@@ -1331,3 +1331,18 @@ function confetti() {
     if (now - t0 < 4500) requestAnimationFrame(f); else g.clearRect(0, 0, innerWidth, innerHeight);
   })(t0);
 }
+
+// ---------- installable app (PWA) ----------
+if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('/sw.js').catch(() => {});
+const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+let installEvt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (!standalone) $('#installBtn').classList.remove('hidden'); });
+$('#installBtn').onclick = async () => {
+  if (!installEvt) return;
+  installEvt.prompt();
+  await installEvt.userChoice.catch(() => {});
+  installEvt = null; $('#installBtn').classList.add('hidden');
+};
+addEventListener('appinstalled', () => { $('#installBtn').classList.add('hidden'); toast('Installed! Open Pass The Mic from your home screen 🎤'); });
+// iPhone/iPad Safari has no install prompt: show the Share → Add to Home Screen tip instead
+if (!standalone && /iphone|ipad|ipod/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent)) $('#iosTip').classList.remove('hidden');
