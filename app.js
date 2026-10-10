@@ -414,9 +414,8 @@ async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
   S.offset = savedOffset(ids[0]); updateSyncLabel();
   await ensurePlayer();
   player.cueVideoById(ids[0]);
-  // packs drop you in somewhere in the first half so every song feels different
-  const from = fromStart ? sung[0] : sung[(Math.random() * Math.max(1, sung.length * 0.25)) | 0];
-  S.resumeAt = Math.max(0, from.t - 4);
+  // every new song starts playing ~10s in, so the room hears it build up before the first cut
+  S.resumeAt = Math.min(10, Math.max(0, sung[sung.length - 1].t - 40));
   S.songTurns = 0;
   if (S.players[S.cur]?.lives <= 0) S.cur = nextAlive(S.cur);
 }
