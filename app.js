@@ -78,7 +78,10 @@ function renderBoard() {
 // ---------- avatars: every player keeps a colour + face ----------
 const FACES = ['😎', '🤩', '🥳', '😜', '🤠', '😏', '🥸', '🤓', '😇', '🤪', '😺', '🦁'];
 function dress(p, i) { if (!p.c) { p.c = (i % 6) + 1; p.f = FACES[i % FACES.length]; } return p; }
-const avatar = (p, size = '', extra = '') => `<span class="av ${size} c${p?.c || 1} ${extra}">${p?.f || '🎤'}</span>`;
+const cssUrl = (u) => (/^https:\/\//.test(u || '') ? encodeURI(u).replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29') : '');
+const avatar = (p, size = '', extra = '') => (p?.photo && cssUrl(p.photo)
+  ? `<span class="av ${size} c${p?.c || 1} photo ${extra}" style="background-image:url('${cssUrl(p.photo)}')" role="img" aria-label="${esc(p.name || 'player')}"></span>`
+  : `<span class="av ${size} c${p?.c || 1} ${extra}">${p?.f || '🎤'}</span>`);
 
 // ---------- sound effects ----------
 let ac;
@@ -128,9 +131,16 @@ const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
 function renderPlayers() {
   $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}${esc(p.name)}<button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('') +
     (S.players.length < 12 ? `<li class="empty"><span class="av lg">＋</span><span class="tag">${S.players.length ? 'add another' : 'add players above'}</span></li>` : '');
+  const canAddMe = ACCT && !S.players.some((p) => p.uid === ACCT.id);
+  $('#addMe').classList.toggle('hidden', !canAddMe);
+  if (canAddMe) $('#addMe').textContent = `+ Add me (${ACCT.profile.display_name})`;
   $('#toSong').disabled = !S.players.length;
 }
-$('#startBtn').onclick = () => { unlockAudio(); renderPlayers(); show('players'); $('#nameIn').focus(); };
+$('#startBtn').onclick = () => {
+  unlockAudio();
+  if (ACCT && !S.players.length) S.players.push(meAsPlayer()); // signed in: you're player one
+  renderPlayers(); show('players'); $('#nameIn').focus();
+};
 $('#addForm').onsubmit = (e) => {
   e.preventDefault();
   const name = $('#nameIn').value.trim();
@@ -162,6 +172,7 @@ $('#micTest').onclick = () => {
   setTimeout(() => { stopRec(); if (!got) $('#micOut').textContent = S.micBlocked ? $('#toast').textContent : "Didn't hear anything. Speak up, or check the mic permission and try again."; }, 4500);
 };
 function resetScores() {
+  S.recorded = false;
   S.players.forEach((p) => { p.lives = S.lives; p.points = 0; p.passes = 0; });
   S.round = 1; S.cur = 0;
 }
@@ -907,6 +918,7 @@ function showEnd(kicker) {
   $('#endAv').innerHTML = `<span class="crown">👑</span>${avatar(top, 'xl')}`;
   sfx.pass();
   renderRank(); endButtons(true);
+  recordResult();
   if (S.net) {
     $('#again').classList.toggle('hidden', !S.net.host);
     $('#newPlayers').classList.add('hidden');
@@ -997,6 +1009,7 @@ addEventListener('popstate', () => {
     history.pushState({ ptm: 'guard' }, '');
   } else if (cur === 'song') $('#songBack').click();
   else if (cur === 'lobby' || (S.net && cur === 'end')) { quitToHome(); }
+  else if (['signin', 'profile', 'leaders'].includes(cur)) show('home');
   else if (cur !== 'home') show('home');
 });
 $('#newPlayers').onclick = () => { renderPlayers(); show('players'); };
@@ -1016,7 +1029,11 @@ const isMe = (i) => !!S.net && S.players[i]?.id === S.net.me.id;
 const roomLink = (code) => `${location.origin}${location.pathname}?room=${code}`;
 try { $('#myName').value = localStorage.getItem('ptm-name') || ''; } catch {}
 
-$('#onlineBtn').onclick = () => { unlockAudio(); show('online'); ensurePlayer().catch(() => {}); };
+$('#onlineBtn').onclick = () => {
+  unlockAudio();
+  if (ACCT && !$('#myName').value) $('#myName').value = ACCT.profile.display_name.slice(0, 14);
+  show('online'); ensurePlayer().catch(() => {});
+};
 $('#onlineBack').onclick = () => show('home');
 const roomParam = new URLSearchParams(location.search).get('room');
 if (roomParam) { $('#joinCode').value = roomParam.toUpperCase().slice(0, 4); show('online'); ensurePlayer().catch(() => {}); }
@@ -1042,7 +1059,7 @@ $('#createRoom').onclick = async () => {
     for (let tries = 0; tries < 4; tries++) {
       const code = NET?.newCode?.() || (await import('./net.js')).newCode();
       const room = await connect(code, true);
-      await room.track({ id: ME.id, name, host: true, ready: false, at: Date.now() });
+      await room.track({ id: ME.id, name, host: true, ready: false, at: Date.now(), ...myLook() });
       await new Promise((r) => setTimeout(r, 1200)); // make sure nobody else already hosts this code
       if (!room.members().some((m) => m.host && m.id !== ME.id)) return enterLobby();
       room.leave(); S.net = null;
@@ -1060,7 +1077,7 @@ $('#joinForm').onsubmit = async (e) => {
   try {
     const room = await connect(code, false);
     // presence is only shared once you've announced yourself, so announce first, then look for the host
-    await room.track({ id: ME.id, name, host: false, ready: false, at: Date.now() });
+    await room.track({ id: ME.id, name, host: false, ready: false, at: Date.now(), ...myLook() });
     const t0 = Date.now();
     while (!room.members().some((m) => m.host) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 200));
     if (!room.members().some((m) => m.host)) { room.leave(); S.net = null; $('#onlineStatus').textContent = `No room called ${code}. Check the code with your friend.`; return; }
@@ -1083,7 +1100,7 @@ function renderLobby(members) {
   if (!S.net) return;
   const host = members.find((m) => m.host);
   $('#lobbyCount').textContent = `Who's in · ${members.length}`;
-  $('#lobbyList').innerHTML = members.map((m, i) => `<li>${avatar(dress({}, i), 'lg', m.ready ? 'ready' : '')}${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}<span class="tag ${m.host ? '' : m.ready ? 'ok' : ''}">${m.host ? '👑 host' : m.ready ? 'ready' : 'getting ready…'}</span></li>`).join('') +
+  $('#lobbyList').innerHTML = members.map((m, i) => `<li>${avatar(dress({ photo: m.photo, c: m.c, f: m.f, name: m.name }, i), 'lg', m.ready ? 'ready' : '')}${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}<span class="tag ${m.host ? '' : m.ready ? 'ok' : ''}">${m.host ? '👑 host' : m.ready ? 'ready' : 'getting ready…'}</span></li>`).join('') +
     '<li class="empty"><span class="av lg">＋</span><span class="tag">invite</span></li>';
   const ready = members.filter((m) => m.ready).length;
   if (S.net.host) $('#lobbyStatus').textContent = members.length < 2 ? 'Share the code. Your friends join from their own phones.' : `${ready}/${members.length} ready`;
@@ -1118,7 +1135,8 @@ $('#lobbyStart').onclick = () => {
   S.lang = $('#lobbyLang').value;
   S.net.track({ ready: true });
   S.lives = +$('#lobbyLives').value;
-  S.players = S.net.members().map((m, i) => dress({ id: m.id, name: m.name }, i));
+  S.players = S.net.members().map((m, i) => dress({ id: m.id, name: m.name, photo: m.photo, uid: m.uid, c: m.c, f: m.f }, i));
+  S.recorded = false;
   resetScores();
   S.started = true; S.midGame = false;
   S.net.send('picking');
@@ -1151,7 +1169,7 @@ function hostSyncPlayers(members) {
   let changed = false, newcomer = false, singerLeft = false;
   for (const m of members) {
     const p = S.players.find((x) => x.id === m.id);
-    if (!p) { S.players.push(dress({ id: m.id, name: m.name, lives: S.lives, points: 0, passes: 0 }, S.players.length)); changed = newcomer = true; }
+    if (!p) { S.players.push(dress({ id: m.id, name: m.name, photo: m.photo, uid: m.uid, c: m.c, f: m.f, lives: S.lives, points: 0, passes: 0 }, S.players.length)); changed = newcomer = true; }
     else if (p.gone) { p.gone = false; changed = newcomer = true; } // came back (lives stay as they were)
   }
   for (const p of S.players) {
@@ -1241,6 +1259,7 @@ async function handleRound(m) {
   S.players = m.players; S.curId = m.cur;
   S.cur = S.players.findIndex((p) => p.id === m.cur);
   S.round = m.round; S.resumeAt = m.resumeAt; S.live = null; S.judged = false;
+  if (m.round === 1 && m.fresh) S.recorded = false;
   S.section = sectionFrom(m.i, m.j);
   $('#chips').innerHTML = ''; $('#heard').textContent = '';
   const me = isMe(S.cur), name = S.players[S.cur]?.name || '';
@@ -1513,6 +1532,206 @@ function confetti() {
     if (now - t0 < 4500) requestAnimationFrame(f); else g.clearRect(0, 0, innerWidth, innerHeight);
   })(t0);
 }
+
+
+// ---------- accounts: Google sign-in, profiles, photos, leaderboards ----------
+// Optional: guests can always play. Signing in saves your results and puts you on the leaderboards.
+let SB = null, ACCT = null; // ACCT = { id, profile }
+const getSB = async () => SB || (SB = await (await import('./net.js')).sb());
+const meAsPlayer = () => ({ name: ACCT.profile.display_name.slice(0, 14), uid: ACCT.id, photo: ACCT.profile.avatar_url, c: ACCT.profile.color || 1, f: ACCT.profile.face || '😎' });
+const myLook = () => (ACCT ? { uid: ACCT.id, photo: ACCT.profile.avatar_url || null, c: ACCT.profile.color || 1, f: ACCT.profile.face || '😎' } : {});
+
+async function initAuth() {
+  try {
+    const c = await getSB();
+    const { data } = await c.auth.getSession();
+    await setSession(data.session, false);
+    // (supabase-js: don't await other calls inside this callback)
+    c.auth.onAuthStateChange((evt, session) => setTimeout(() => setSession(session, evt === 'SIGNED_IN'), 0));
+  } catch (e) { console.warn('accounts unavailable', e); }
+}
+async function setSession(session, greet) {
+  if (!session?.user) { ACCT = null; return renderAcct(); }
+  if (ACCT?.id === session.user.id) return renderAcct();
+  const c = await getSB();
+  let { data: profile } = await c.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+  if (!profile) { // account made before the profiles table existed
+    const meta = session.user.user_metadata || {};
+    ({ data: profile } = await c.from('profiles').upsert({ id: session.user.id, display_name: (meta.full_name || meta.name || 'Singer').slice(0, 24), avatar_url: meta.avatar_url || null }).select().single());
+  }
+  ACCT = { id: session.user.id, profile: profile || { display_name: 'Singer', face: '😎', color: 1 } };
+  renderAcct();
+  if (greet) toast(`Welcome, ${ACCT.profile.display_name.split(' ')[0]} 👋`);
+}
+function renderAcct() {
+  const b = $('#acctBtn');
+  b.classList.toggle('out', !ACCT);
+  $('#acctAv').innerHTML = ACCT ? avatar({ photo: ACCT.profile.avatar_url, c: ACCT.profile.color, f: ACCT.profile.face, name: ACCT.profile.display_name }, 'xs') : '';
+  $('#acctName').textContent = ACCT ? ACCT.profile.display_name.split(' ')[0] : 'Sign in';
+  if ($('#s-players').classList.contains('active')) renderPlayers();
+  $('#leadersSignin').classList.toggle('hidden', !!ACCT);
+}
+$('#acctBtn').onclick = () => (ACCT ? openProfile() : show('signin'));
+$('#leadersBtn').onclick = () => openLeaders();
+$('#endLeaders').onclick = () => openLeaders();
+$('#leadersSignin').onclick = () => show('signin');
+document.querySelectorAll('[data-home]').forEach((b) => (b.onclick = () => show('home')));
+$('#addMe').onclick = () => {
+  if (!ACCT || S.players.some((p) => p.uid === ACCT.id) || S.players.length >= 12) return;
+  S.players.push(meAsPlayer()); renderPlayers();
+};
+
+$('#googleBtn').onclick = async () => {
+  $('#signinStatus').textContent = 'Opening Google…';
+  try {
+    const on = await (await import('./net.js')).providers().catch(() => ({}));
+    if (!on.google) return ($('#signinStatus').textContent = "Google sign-in isn't switched on yet. Try again soon!");
+    const c = await getSB();
+    const { error } = await c.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href.split('#')[0] } });
+    if (error) throw error;
+  } catch (e) {
+    $('#signinStatus').textContent = /provider is not enabled|Unsupported provider/i.test(e.message || '') ? "Google sign-in isn't switched on yet. Try again soon!" : "Couldn't open Google sign-in. Check your connection and try again.";
+  }
+};
+
+// ---- profile
+let draft = null;
+async function openProfile() {
+  if (!ACCT) return show('signin');
+  const p = ACCT.profile;
+  draft = { face: p.face || '😎', color: p.color || 1, avatar_url: p.avatar_url || null };
+  $('#profName').value = p.display_name || '';
+  $('#profUser').value = p.username || '';
+  $('#profStatus').textContent = '';
+  renderProfile();
+  show('profile');
+  loadStats();
+}
+function renderProfile() {
+  $('#profAv').innerHTML = avatar({ photo: draft.avatar_url, c: draft.color, f: draft.face, name: $('#profName').value }, '');
+  $('#photoDel').classList.toggle('hidden', !draft.avatar_url);
+  $('#faces').innerHTML = FACES.map((f) => `<button type="button" data-face="${f}" class="${f === draft.face ? 'on' : ''}" aria-label="Avatar ${f}">${f}</button>`).join('');
+  $('#swatches').innerHTML = [1, 2, 3, 4, 5, 6].map((c) => `<button type="button" data-color="${c}" class="c${c} ${c === draft.color ? 'on' : ''}" aria-label="Colour ${c}"></button>`).join('');
+}
+$('#faces').onclick = (e) => { const f = e.target.closest('[data-face]')?.dataset.face; if (f) { draft.face = f; renderProfile(); } };
+$('#swatches').onclick = (e) => { const c = e.target.closest('[data-color]')?.dataset.color; if (c) { draft.color = +c; renderProfile(); } };
+async function saveProfile(patch) {
+  const c = await getSB();
+  const { data, error } = await c.from('profiles').upsert({ id: ACCT.id, ...patch, updated_at: new Date().toISOString() }).select().single();
+  if (error) throw error;
+  ACCT.profile = data;
+  renderAcct();
+  return data;
+}
+$('#profSave').onclick = async () => {
+  const name = $('#profName').value.trim(), user = $('#profUser').value.trim().replace(/^@/, '');
+  if (!name) return ($('#profStatus').textContent = 'Add a display name first.');
+  if (user && !/^[a-zA-Z0-9_]{3,20}$/.test(user)) return ($('#profStatus').textContent = 'Usernames are 3–20 letters, numbers or _.');
+  $('#profSave').disabled = true; $('#profStatus').textContent = 'Saving…';
+  try {
+    await saveProfile({ display_name: name, username: user || null, face: draft.face, color: draft.color });
+    $('#profStatus').textContent = '✓ Saved';
+    toast('Profile saved ✓');
+  } catch (e) {
+    $('#profStatus').textContent = e.code === '23505' ? 'That username is taken. Try another.' : "Couldn't save. Try again.";
+  } finally { $('#profSave').disabled = false; }
+};
+// photos: square-crop + shrink on the phone (fast uploads), then save straight away
+$('#photoIn').onchange = async (e) => {
+  const file = e.target.files?.[0]; e.target.value = '';
+  if (!file) return;
+  $('#profStatus').textContent = 'Uploading your photo…';
+  try {
+    const blob = await squareJpeg(file, 512);
+    const c = await getSB(), path = `${ACCT.id}/avatar-${Date.now()}.jpg`;
+    const { error } = await c.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg', upsert: true, cacheControl: '31536000' });
+    if (error) throw error;
+    draft.avatar_url = c.storage.from('avatars').getPublicUrl(path).data.publicUrl;
+    await saveProfile({ avatar_url: draft.avatar_url });
+    renderProfile();
+    $('#profStatus').textContent = '✓ Looking good! Your photo shows up in every game.';
+  } catch (err) {
+    console.warn(err);
+    $('#profStatus').textContent = "Couldn't use that photo. Try a JPG or PNG under 10 MB.";
+  }
+};
+$('#photoDel').onclick = async () => {
+  try { draft.avatar_url = null; await saveProfile({ avatar_url: null }); renderProfile(); $('#profStatus').textContent = 'Photo removed. Using your emoji avatar.'; }
+  catch { $('#profStatus').textContent = "Couldn't remove it. Try again."; }
+};
+async function squareJpeg(file, size) {
+  if (file.size > 10 * 1024 * 1024) throw new Error('too big');
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = url; });
+    const s = Math.min(img.naturalWidth, img.naturalHeight);
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = size;
+    cv.getContext('2d').drawImage(img, (img.naturalWidth - s) / 2, (img.naturalHeight - s) / 2, s, s, 0, 0, size, size);
+    return await new Promise((ok, no) => cv.toBlob((b) => (b ? ok(b) : no(new Error('encode'))), 'image/jpeg', 0.86));
+  } finally { URL.revokeObjectURL(url); }
+}
+async function loadStats() {
+  $('#profStats').innerHTML = '';
+  try {
+    const c = await getSB();
+    const { data } = await c.from('game_results').select('points,lines,won').eq('user_id', ACCT.id).limit(5000);
+    const g = data || [], sum = (k) => g.reduce((n, r) => n + (r[k] || 0), 0);
+    const tile = (v, l) => `<div><b>${v}</b><span>${l}</span></div>`;
+    $('#profStats').innerHTML = tile(g.length, 'Games') + tile(g.filter((r) => r.won).length, 'Wins') + tile(sum('points'), 'Points') + tile(sum('lines'), 'Lines');
+  } catch {}
+}
+$('#signOut').onclick = async () => {
+  try { await (await getSB()).auth.signOut(); } catch {}
+  ACCT = null; renderAcct(); show('home'); toast('Signed out. See you on the mic 🎤');
+};
+
+// ---- leaderboards
+let boardKind = 'week';
+document.querySelectorAll('[data-board]').forEach((t) => (t.onclick = () => openLeaders(t.dataset.board)));
+async function openLeaders(kind = boardKind) {
+  boardKind = kind;
+  document.querySelectorAll('[data-board]').forEach((t) => t.classList.toggle('on', t.dataset.board === kind));
+  if (!$('#s-leaders').classList.contains('active')) show('leaders');
+  $('#leadersSignin').classList.toggle('hidden', !!ACCT);
+  $('#leaders').innerHTML = '';
+  $('#leadersStatus').textContent = 'Loading…';
+  try {
+    const c = await getSB();
+    const { data, error } = await c.from(kind === 'week' ? 'leaderboard_week' : 'leaderboard_all').select('*').order('points', { ascending: false }).limit(50);
+    if (error) throw error;
+    if (boardKind !== kind) return; // switched tabs meanwhile
+    $('#leadersStatus').textContent = data.length ? '' : kind === 'week' ? 'No scores yet this week. Play a game signed in and grab #1 👑' : 'No scores yet. Be the first legend 👑';
+    $('#leaders').innerHTML = data.map((r, i) => `<li class="${ACCT && r.id === ACCT.id ? 'me' : ''}" style="animation-delay:${Math.min(i, 12) * 0.04}s">
+      <span class="pos">${i + 1}</span>${avatar({ photo: r.avatar_url, c: r.color, f: r.face, name: r.display_name }, 'sm')}
+      <span class="who2"><b>${esc(r.display_name)}${ACCT && r.id === ACCT.id ? ' (you)' : ''}</b><small>${r.username ? '@' + esc(r.username) + ' · ' : ''}${r.wins} win${r.wins === 1 ? '' : 's'} · ${r.games} game${r.games === 1 ? '' : 's'}</small></span>
+      <span class="pts">${r.points}</span></li>`).join('');
+  } catch { $('#leadersStatus').textContent = "Couldn't load the leaderboard. Check your connection."; }
+}
+
+// ---- save the result when a game ends (once per game, signed-in players only)
+async function recordResult() {
+  const note = $('#savedNote');
+  const me = S.net ? S.players.find((p) => p.id === ME.id) : S.players.find((p) => ACCT && p.uid === ACCT.id);
+  const played = S.players.some((p) => p.passes > 0 || p.lives < S.lives);
+  if (!played) return (note.textContent = '');
+  if (!ACCT) return (note.textContent = '🏆 Sign in to save your scores and get on the leaderboard.');
+  if (!me) return (note.textContent = '');
+  if (S.recorded) return;
+  S.recorded = true;
+  const top = standings()[0];
+  try {
+    const c = await getSB();
+    const { error } = await c.from('game_results').insert({
+      user_id: ACCT.id, mode: S.net ? 'online' : 'local', pack: (S.pack || S.song?.title || null)?.slice(0, 60),
+      points: Math.min(5000, me.points || 0), lines: Math.min(200, me.passes || 0), players: S.players.length,
+      won: S.players.length > 1 && top === me,
+    });
+    if (error) throw error;
+    note.textContent = `✓ Saved to your profile · +${me.points || 0} points on the leaderboard`;
+  } catch { S.recorded = false; note.textContent = "Couldn't save this game's score."; }
+}
+initAuth();
 
 // ---------- installable app (PWA) ----------
 if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('/sw.js').catch(() => {});

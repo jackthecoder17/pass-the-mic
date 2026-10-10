@@ -1,17 +1,28 @@
 // Online rooms over Supabase Realtime: broadcast for game messages, presence for who's in the room.
-// No database tables: the host's phone is the source of truth and broadcasts every decision.
+// Rooms use no database tables: the host's phone is the source of truth and broadcasts every decision.
+// The same client also handles accounts (Google sign-in), profiles and leaderboards.
 
 const SB_URL = 'https://rwpscifwaaislizubdtz.supabase.co';
 // public "anon" key: designed to ship in browser code
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ3cHNjaWZ3YWFpc2xpenViZHR6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1ODQyMjgsImV4cCI6MjEwNzE2MDIyOH0.qZQMgU17Z1bsmef-bhfNSwtH15cM9olNyn7_hEajtz4';
 
 let client;
-async function sb() {
+// one Supabase client for everything: accounts (Google sign-in), profiles, leaderboards, live rooms
+export async function sb() {
   if (!client) {
     const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
-    client = createClient(SB_URL, SB_KEY, { realtime: { params: { eventsPerSecond: 20 } } });
+    client ??= createClient(SB_URL, SB_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
+      realtime: { params: { eventsPerSecond: 20 } },
+    });
   }
   return client;
+}
+
+// which sign-in providers are switched on (so we never send people to an error page)
+export async function providers() {
+  const r = await fetch(`${SB_URL}/auth/v1/settings`, { headers: { apikey: SB_KEY } });
+  return r.ok ? (await r.json()).external || {} : {};
 }
 
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L

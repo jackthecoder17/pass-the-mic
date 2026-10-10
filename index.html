@@ -35,6 +35,10 @@
 
   <!-- HOME -->
   <section id="s-home" class="screen active">
+    <div class="home-top">
+      <button class="chip" id="leadersBtn" type="button">🏆 Leaderboards</button>
+      <button class="acct" id="acctBtn" type="button"><span id="acctAv"></span><span id="acctName">Sign in</span></button>
+    </div>
     <div class="hero">
       <div class="logo-wrap">
         <div class="logo-disc" aria-hidden="true"><span>🎤</span></div>
@@ -105,6 +109,7 @@
       <input id="nameIn" placeholder="Player name" maxlength="14" autocomplete="off" enterkeyhint="done">
       <button class="btn cream" type="submit">Add</button>
     </form>
+    <button class="btn ghost hidden" id="addMe" type="button"></button>
     <ul id="plist" class="crowd"></ul>
     <div class="opts">
       <label>Lives
@@ -249,8 +254,63 @@
       <button class="btn hot big" id="again" type="button">PLAY AGAIN 🔁</button>
       <button class="btn ghost" id="endGame" type="button">End game</button>
       <button class="btn ghost" id="newPlayers" type="button">New players</button>
+      <button class="btn ghost" id="endLeaders" type="button">🏆 Leaderboards</button>
       <button class="btn ghost" id="endHome" type="button">🏠 Home</button>
     </div>
+    <p class="muted small" id="savedNote"></p>
+  </section>
+
+  <!-- SIGN IN -->
+  <section id="s-signin" class="screen">
+    <div class="topbar"><button class="back" type="button" data-home>← Back</button></div>
+    <div class="signin">
+      <div class="logo-disc static" aria-hidden="true"><span>🎤</span></div>
+      <h2>SIGN IN</h2>
+      <p class="muted">Save your scores, get on the leaderboards, and put your own face in the game.</p>
+      <button class="btn google big" id="googleBtn" type="button"><svg viewBox="0 0 48 48" width="22" height="22" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.1 7.9 3l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Continue with Google</button>
+      <p class="status" id="signinStatus"></p>
+      <p class="muted small">No account needed to play. Guests can always jump straight in.</p>
+    </div>
+  </section>
+
+  <!-- PROFILE -->
+  <section id="s-profile" class="screen">
+    <div class="topbar"><button class="back" type="button" data-home>← Home</button></div>
+    <div class="prof-head">
+      <div class="prof-av" id="profAv"></div>
+      <div class="row center-row">
+        <label class="btn ghost small-btn" for="photoIn">📷 Change photo</label>
+        <input type="file" id="photoIn" accept="image/*" class="hidden">
+        <button class="btn ghost small-btn" id="photoDel" type="button">Remove</button>
+      </div>
+    </div>
+    <div class="stats" id="profStats"></div>
+    <label class="field">Display name
+      <input id="profName" maxlength="24" autocomplete="nickname">
+    </label>
+    <label class="field">Username
+      <div class="at"><span>@</span><input id="profUser" maxlength="20" autocomplete="off" autocapitalize="none" placeholder="optional"></div>
+    </label>
+    <div class="field"><span>Avatar when there's no photo</span>
+      <div class="faces" id="faces"></div>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <p class="status" id="profStatus"></p>
+    <button class="btn hot big" id="profSave" type="button">SAVE PROFILE</button>
+    <button class="btn ghost danger" id="signOut" type="button">Sign out</button>
+  </section>
+
+  <!-- LEADERBOARDS -->
+  <section id="s-leaders" class="screen">
+    <div class="topbar"><button class="back" type="button" data-home>← Home</button></div>
+    <h2>LEADERBOARDS</h2>
+    <div class="tabs" role="tablist">
+      <button class="tab on" type="button" data-board="week" role="tab">This week</button>
+      <button class="tab" type="button" data-board="all" role="tab">All time</button>
+    </div>
+    <ol class="leaders" id="leaders"></ol>
+    <p class="status center-text" id="leadersStatus"></p>
+    <button class="btn hot big push hidden" id="leadersSignin" type="button">SIGN IN TO GET ON THE BOARD</button>
   </section>
 </main>
 
