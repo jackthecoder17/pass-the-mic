@@ -17,7 +17,7 @@ function walk(o, key, out) {
 }
 
 // official songs from YouTube Music's search ("Songs" filter)
-async function musicSearch(query) {
+export async function musicSearch(query) {
   const r = await fetch('https://music.youtube.com/youtubei/v1/search?prettyPrint=false', {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'user-agent': UA, origin: 'https://music.youtube.com', referer: 'https://music.youtube.com/' },
@@ -31,7 +31,11 @@ async function musicSearch(query) {
   return walk(data, 'musicResponsiveListItemRenderer', []).map((m) => {
     const cols = (m.flexColumns || []).map((c) => (c.musicResponsiveListItemFlexColumnRenderer?.text?.runs || []).map((x) => x.text).join(''));
     const meta = (cols[1] || '').split(' • ');
-    return { id: m.playlistItemData?.videoId, title: cols[0] || '', channel: meta[0] || '', seconds: seconds(meta[meta.length - 1]), official: true };
+    const thumbs = m.thumbnail?.musicThumbnailRenderer?.thumbnail?.thumbnails || [];
+    return {
+      id: m.playlistItemData?.videoId, title: cols[0] || '', channel: meta[0] || '', album: meta.length > 2 ? meta[1] : '',
+      seconds: seconds(meta[meta.length - 1]), art: thumbs[thumbs.length - 1]?.url || '', official: true,
+    };
   });
 }
 

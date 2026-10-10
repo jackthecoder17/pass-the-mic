@@ -146,8 +146,13 @@ async function nextPackSong() {
   while (S.qi < S.queue.length) {
     const item = S.queue[S.qi++];
     try {
-      const song = item.live ? await resolveLive(item) : await resolvePacked(item);
-      if (song) { await setSong(song); return goHandoff(); }
+      const song = item.picked ? item.song : item.live ? await resolveLive(item) : await resolvePacked(item);
+      if (song) {
+        await setSong(song, !!item.picked);
+        goHandoff();
+        if (song.warn) toast(SYNC_WARN);
+        return;
+      }
     } catch (e) { console.warn('skipping', item.t, e); }
   }
   endGame(`${S.pack} finished`);
@@ -158,11 +163,22 @@ async function resolvePacked(item) {
   const y = await r.json();
   return y.syncedLyrics ? { title: item.t, artist: item.a, lyrics: y.syncedLyrics, ids: item.v } : null;
 }
+const findVideos = (title, artist, dur) =>
+  fetch(`/api/yt?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&dur=${dur}`).then((r) => r.json()).then((j) => j.results || []);
 async function resolveLive(item) {
-  const find = (title, artist, dur) => fetch(`/api/yt?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&dur=${dur}`).then((r) => r.json()).then((j) => j.results || []);
-  const s = await resolveSong(item.t, item.a, find);
-  if (!s || !s.official || s.delta > 2) return null; // only songs we can keep in sync
+  const s = await resolveSong(item.t, item.a, findVideos);
+  if (!s || !s.official || s.delta > 2) return null; // charts: only songs we can keep in sync
   return { title: item.t, artist: item.a, lyrics: s.lyrics, ids: s.v };
+}
+// a song someone searched for: play the exact track they picked, match lyrics to its length
+async function resolvePicked(item) {
+  const find = async (title, artist, dur) => {
+    const more = await findVideos(title, artist, dur).catch(() => []);
+    return [{ id: item.vid, seconds: item.secs, official: true }, ...more.filter((v) => v.id !== item.vid)];
+  };
+  const s = await resolveSong(item.t, item.a, find);
+  if (!s) return null;
+  return { title: item.t, artist: item.a, lyrics: s.lyrics, ids: s.v, warn: s.delta > 2 };
 }
 function showLoading() {
   $('#roundInfo').textContent = S.pack || '';
@@ -171,40 +187,95 @@ function showLoading() {
   $('#readyBtn').disabled = true;
   show('handoff');
 }
+const SYNC_WARN = 'Heads up: the lyrics for this one may be slightly off. Use 🎯 Fix sync while it plays.';
 
-// ---------- song search ----------
+// ---------- song search + your own playlist ----------
+S.mine = []; // songs the room added: { t, a, vid, secs, art, song }
 $('#searchForm').onsubmit = (e) => { e.preventDefault(); const q = $('#q').value.trim(); if (q) search(q); };
-$('#results').onclick = (e) => {
-  const i = e.target.closest('[data-i]')?.dataset.i;
-  if (i != null) selectSong(S.results[+i]);
-};
 
 async function search(q) {
-  $('#songStatus').textContent = 'Searching…';
+  $('#searchStatus').textContent = 'Searching…';
   $('#results').innerHTML = '';
   try {
-    const r = await fetch('https://lrclib.net/api/search?q=' + encodeURIComponent(q));
-    const data = await r.json();
-    const seen = new Set();
-    const list = data
-      .filter((x) => x.syncedLyrics && !x.instrumental && !/sped up|slowed|nightcore|8d audio/i.test(x.trackName))
-      .filter((x) => { const k = (cleanTitle(x.trackName, x.artistName) + '|' + x.artistName).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; })
-      .slice(0, 12);
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q));
+    const list = ((await r.json()).results || []).map((v) => ({ t: v.title, a: v.channel, album: v.album, vid: v.id, secs: v.seconds, art: v.art }));
     S.results = list;
-    $('#songStatus').textContent = list.length ? '' : 'No synced lyrics found for that. Try another song.';
-    $('#results').innerHTML = list.map((x, i) => `<li><button type="button" data-i="${i}"><b>${esc(cleanTitle(x.trackName, x.artistName))}</b><span>${esc(x.artistName)} · ${fmt(x.duration)}</span></button></li>`).join('');
-    return list;
+    $('#searchStatus').textContent = list.length ? '' : 'No songs found. Try different words.';
+    renderResults();
   } catch {
-    $('#songStatus').textContent = "Couldn't reach the lyrics service. Check your connection.";
-    return [];
+    $('#searchStatus').textContent = "Couldn't search right now. Check your connection.";
   }
 }
-const cleanTitle = (t, artist = '') => {
-  let s = t.replace(/\s*[\[(](official|lyric|audio|video|visuali|music)[^\])]*[\])]/gi, '').trim();
-  const dash = s.match(/^(.+?)\s+[-–]\s+(.+)$/); // "Rema - Calm Down" -> "Calm Down"
-  if (dash && artist && artist.toLowerCase().includes(dash[1].toLowerCase())) s = dash[2];
-  return s;
+function renderResults() {
+  $('#results').innerHTML = S.results.map((x, i) => {
+    const added = S.mine.some((m) => m.vid === x.vid);
+    return `<li class="res">
+      ${x.art ? `<img src="${esc(x.art)}" alt="" loading="lazy">` : '<span class="noart">🎵</span>'}
+      <div class="ri"><b>${esc(x.t)}</b><span>${esc(x.a)}${x.album && x.album !== x.t ? ' · ' + esc(x.album) : ''} · ${fmt(x.secs)}</span></div>
+      <button class="chip" type="button" data-play="${i}">▶ Play</button>
+      <button class="chip add ${added ? 'on' : ''}" type="button" data-add="${i}" ${added ? 'disabled' : ''}>${added ? '✓ Added' : '+ Add'}</button>
+    </li>`;
+  }).join('');
+}
+$('#results').onclick = (e) => {
+  const play = e.target.closest('[data-play]')?.dataset.play;
+  const add = e.target.closest('[data-add]');
+  if (play != null) playPicked(S.results[+play]);
+  else if (add) addToPlaylist(S.results[+add.dataset.add], add);
 };
+
+async function addToPlaylist(x, btn) {
+  if (S.mine.some((m) => m.vid === x.vid)) return;
+  btn.disabled = true; btn.textContent = '⏳';
+  try {
+    const song = await resolvePicked(x);
+    if (!song) { btn.textContent = '✗ No lyrics'; toast(`No synced lyrics exist for “${x.t}” yet. Try another song.`); return; }
+    S.mine.push({ ...x, song });
+    btn.textContent = '✓ Added'; btn.classList.add('on');
+    if (song.warn) toast(`Added. ${SYNC_WARN}`);
+    renderTray();
+  } catch {
+    btn.disabled = false; btn.textContent = '+ Add';
+    toast('Something went wrong. Try again.');
+  }
+}
+function renderTray() {
+  const n = S.mine.length;
+  $('#tray').classList.toggle('hidden', !n);
+  $('#trayCount').textContent = `🎶 Your playlist · ${n} song${n === 1 ? '' : 's'}`;
+  $('#trayList').innerHTML = S.mine.map((m, i) => `<span class="tchip">${esc(m.t)}<button type="button" data-rm="${i}" aria-label="Remove ${esc(m.t)}">✕</button></span>`).join('');
+}
+$('#trayList').onclick = (e) => {
+  const i = e.target.closest('[data-rm]')?.dataset.rm;
+  if (i == null) return;
+  S.mine.splice(+i, 1); renderTray(); renderResults();
+};
+$('#trayStart').onclick = () => {
+  if (!S.mine.length) return;
+  S.queue = S.mine.map((m) => ({ picked: true, song: m.song, t: m.t }));
+  S.qi = 0; S.mode = 'pack'; S.pack = 'Your playlist';
+  nextPackSong();
+};
+
+let picking = false;
+async function playPicked(x) {
+  if (picking) return;
+  picking = true;
+  $('#searchStatus').textContent = `Finding the lyrics for “${x.t}”…`;
+  try {
+    const song = await resolvePicked(x);
+    if (!song) throw new Error(`Sorry, no synced lyrics exist for “${x.t}” yet. Try another song.`);
+    S.mode = 'single'; S.pack = null;
+    await setSong(song, true);
+    $('#searchStatus').textContent = '';
+    goHandoff();
+    if (song.warn) toast(SYNC_WARN);
+  } catch (e) {
+    $('#searchStatus').textContent = e.message || 'Something went wrong. Try another song.';
+  } finally {
+    picking = false;
+  }
+}
 
 function parseLRC(lrc) {
   const lines = [];
@@ -222,30 +293,6 @@ function parseLRC(lrc) {
   return lines;
 }
 
-let picking = false;
-async function selectSong(x) {
-  if (picking) return;
-  picking = true;
-  $('#songStatus').textContent = `Loading “${cleanTitle(x.trackName)}”…`;
-  try {
-    const title = cleanTitle(x.trackName, x.artistName);
-    const r = await fetch(`/api/yt?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(x.artistName)}&dur=${Math.round(x.duration)}`);
-    const vids = (await r.json()).results || [];
-    if (!vids.length) throw new Error("Couldn't find that track to play. Pick another.");
-    // the official track is the master the lyrics were timed to; use the lyric version cut to its exact length
-    const top = vids[0];
-    const lrc = top.official && Math.abs(top.seconds - x.duration) > 1.5 ? (await lyricsFor(x, title, top.seconds)) || x : x;
-    S.mode = 'single'; S.pack = null;
-    await setSong({ title, artist: x.artistName, lyrics: lrc.syncedLyrics, ids: vids.map((v) => v.id) }, true);
-    $('#songStatus').textContent = '';
-    goHandoff();
-  } catch (e) {
-    $('#songStatus').textContent = e.message || 'Something went wrong. Try another song.';
-  } finally {
-    picking = false;
-  }
-}
-
 async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
   const lines = parseLRC(lyrics);
   const sung = lines.filter((l) => l.words.length >= 3);
@@ -259,18 +306,6 @@ async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
   S.resumeAt = Math.max(0, from.t - 4);
   S.songTurns = 0;
   if (S.players[S.cur]?.lives <= 0) S.cur = nextAlive(S.cur);
-}
-
-async function lyricsFor(x, title, secs) {
-  const same = S.results.find((y) => y !== x && y.syncedLyrics && y.artistName === x.artistName &&
-    cleanTitle(y.trackName, y.artistName).toLowerCase() === title.toLowerCase() && Math.abs(y.duration - secs) <= 2);
-  if (same) return same;
-  try {
-    const r = await fetch(`https://lrclib.net/api/get?artist_name=${encodeURIComponent(x.artistName)}&track_name=${encodeURIComponent(title)}&duration=${secs}`);
-    if (!r.ok) return null;
-    const y = await r.json();
-    return y.syncedLyrics ? y : null;
-  } catch { return null; }
 }
 
 // per-video sync offset, remembered on this device

@@ -4,6 +4,10 @@ The sing-the-next-line party game, with an AI referee.
 
 Pick any song, pass one phone around. The music plays with lyrics on screen, then **suddenly cuts out** and the lyrics vanish. Whoever's holding the phone has to carry on singing from memory. The AI listens and scores how close they got. Miss it, and you lose a life. The last one singing wins.
 
+## Any song
+
+Search YouTube Music's whole catalog (`api/search.js`). Tap ▶ Play to play one song now, or + Add to build the room's own playlist. Each pick is checked for time-synced lyrics as it's added, so you know right away whether it's playable.
+
 ## Song packs
 
 Pick a vibe: 🎲 Mix Everything, live charts (🔥 Nigeria, 🌍 Worldwide, 🇬🇭 Ghana), plus curated packs: Naija Anthems, Naija Throwbacks, Amapiano & Street, Gospel & Worship, Pop, R&B & Love Songs, Hip-Hop, Rock & Classics, 2000s Party and Movie & Disney. Each song lasts one round (everyone sings once), then the next song starts automatically.

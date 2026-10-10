@@ -63,16 +63,22 @@
 
   <!-- SONG -->
   <section id="s-song" class="screen">
-    <h2>Pick a vibe</h2>
+    <h2>Pick the music</h2>
+    <form id="searchForm" class="row">
+      <input id="q" placeholder="Search any song or artist…" autocomplete="off" enterkeyhint="search">
+      <button class="btn" type="submit">Search</button>
+    </form>
+    <p class="muted small">▶ Play one now, or <b>+ Add</b> a few to build your own playlist. Everyone can add their favourite.</p>
+    <p id="searchStatus" class="status"></p>
+    <ul id="results" class="results"></ul>
+    <h3>Or pick a vibe</h3>
     <p class="muted small">Each song lasts one round, then the next one in the pack starts.</p>
     <p id="songStatus" class="status"></p>
     <div id="packs" class="packs"></div>
-    <h3>Or play one specific song</h3>
-    <form id="searchForm" class="row">
-      <input id="q" placeholder="Song or artist…" autocomplete="off" enterkeyhint="search">
-      <button class="btn" type="submit">Search</button>
-    </form>
-    <ul id="results" class="results"></ul>
+    <div id="tray" class="tray hidden">
+      <div class="tray-top"><b id="trayCount"></b><button class="btn" id="trayStart" type="button">Start ▶</button></div>
+      <div id="trayList" class="tray-list"></div>
+    </div>
   </section>
 
   <!-- HANDOFF -->
