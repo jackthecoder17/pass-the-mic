@@ -415,7 +415,7 @@ async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
   await ensurePlayer();
   player.cueVideoById(ids[0]);
   // packs drop you in somewhere in the first half so every song feels different
-  const from = fromStart ? sung[0] : sung[(Math.random() * Math.max(1, sung.length * 0.4)) | 0];
+  const from = fromStart ? sung[0] : sung[(Math.random() * Math.max(1, sung.length * 0.25)) | 0];
   S.resumeAt = Math.max(0, from.t - 4);
   S.songTurns = 0;
   if (S.players[S.cur]?.lives <= 0) S.cur = nextAlive(S.cur);
@@ -512,15 +512,20 @@ function sectionFrom(i, j) {
 function pickSection(from) {
   const L = S.song.lines;
   const minWords = Math.min(14, 4 + (S.round - 1) * 2);
-  const lead = 7 + Math.random() * 7; // seconds of music to hear first
-  for (let i = 1; i < L.length; i++) {
-    if (L[i].t < from + lead || L[i].words.length < 3) continue;
-    let j = i;
-    const words = [];
-    while (j < L.length && j - i < 3 && words.length < minWords && L[j].words.length) { words.push(...L[j].words); j++; }
-    if (words.length < 4) continue;
-    const lines = L.slice(i, j);
-    return { i, j, start: L[i].t, end: lines[lines.length - 1].end, words };
+  // let people feel the song first: ~22-32s on a fresh song, ~14-22s after that
+  const fresh = S.songTurns === 0;
+  const lead = fresh ? 22 + Math.random() * 10 : 14 + Math.random() * 8;
+  // near the end of a song there may not be room for the full wait: fall back to shorter ones
+  for (const wait of [lead, lead * 0.6, 7]) {
+    for (let i = 1; i < L.length; i++) {
+      if (L[i].t < from + wait || L[i].words.length < 3) continue;
+      let j = i;
+      const words = [];
+      while (j < L.length && j - i < 3 && words.length < minWords && L[j].words.length) { words.push(...L[j].words); j++; }
+      if (words.length < 4) continue;
+      const lines = L.slice(i, j);
+      return { i, j, start: L[i].t, end: lines[lines.length - 1].end, words };
+    }
   }
   return null;
 }
