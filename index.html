@@ -27,7 +27,10 @@
     <div class="hero">
       <div class="logo">PASS<br>THE <span>MIC</span></div>
       <p class="tag">Pick a song. Pass the phone. When the music stops, <b>you sing the next line.</b> The AI is listening 👂</p>
-      <button class="btn big" id="startBtn">Start a game</button>
+      <div class="col">
+        <button class="btn big" id="startBtn">📱 Play on one phone</button>
+        <button class="btn big alt" id="onlineBtn">🌍 Play online with friends</button>
+      </div>
       <ol class="how">
         <li><span>🎵</span><div><b>The song plays</b> with lyrics on screen</div></li>
         <li><span>⏸️</span><div><b>It suddenly cuts out</b> and the lyrics vanish</div></li>
@@ -35,6 +38,46 @@
         <li><span>💔</span><div><b>Miss it, lose a life.</b> Last one singing wins.</div></li>
       </ol>
     </div>
+  </section>
+
+  <!-- ONLINE: create / join -->
+  <section id="s-online" class="screen">
+    <div class="topbar"><button class="back" type="button" id="onlineBack">← Home</button></div>
+    <h2>Play online</h2>
+    <p class="muted small">Everyone plays on their own phone, wherever they are. Tip: jump on a WhatsApp call so you can hear each other sing 😂</p>
+    <label class="field">Your name
+      <input id="myName" placeholder="Your name" maxlength="14" autocomplete="nickname">
+    </label>
+    <button class="btn big" id="createRoom" type="button">✨ Create a room</button>
+    <div class="or"><span>or join a friend</span></div>
+    <form id="joinForm" class="row">
+      <input id="joinCode" placeholder="Room code" maxlength="4" autocomplete="off" autocapitalize="characters" class="code-in">
+      <button class="btn" type="submit">Join</button>
+    </form>
+    <p id="onlineStatus" class="status"></p>
+  </section>
+
+  <!-- ONLINE: lobby -->
+  <section id="s-lobby" class="screen">
+    <div class="topbar"><button class="back" type="button" id="lobbyBack">← Leave room</button></div>
+    <div class="center col">
+      <p class="kicker">Room code</p>
+      <div class="room-code" id="roomCode">····</div>
+      <button class="btn ghost" id="shareRoom" type="button">📲 Invite friends</button>
+    </div>
+    <h3 id="lobbyCount">Players</h3>
+    <ul id="lobbyList" class="lobby-list"></ul>
+    <div class="opts">
+      <label id="livesWrap">Lives
+        <select id="lobbyLives"><option>1</option><option>2</option><option selected>3</option><option>5</option></select>
+      </label>
+      <label>Your accent
+        <select id="lobbyLang"><option value="en-US">🇺🇸 US</option><option value="en-GB">🇬🇧 UK</option><option value="en-NG">🇳🇬 Nigeria</option></select>
+      </label>
+    </div>
+    <button class="btn ghost" id="readyUp" type="button">🎧 Tap when ready (turns on sound + mic)</button>
+    <p id="lobbyStatus" class="status center-text"></p>
+    <button class="btn big" id="lobbyStart" type="button">🎵 Pick the music →</button>
   </section>
 
   <!-- PLAYERS -->
@@ -87,9 +130,10 @@
   <section id="s-handoff" class="screen center">
     <p class="kicker" id="roundInfo"></p>
     <p class="next-song" id="handSong"></p>
-    <p class="muted">Pass the phone to</p>
+    <p class="muted" id="handLead">Pass the phone to</p>
     <div class="who" id="handName"></div>
-    <p class="muted small narrow">Listen closely. When the music stops, it's your turn to carry on.</p>
+    <p class="muted small narrow" id="handHint">Listen closely. When the music stops, it's your turn to carry on.</p>
+    <p class="kicker hidden" id="handCount"></p>
     <button class="btn big" id="readyBtn">I'm ready ▶</button>
     <button class="btn ghost skip-song" id="skipSongBtn" type="button">Don't know this one? Skip song ⏭</button>
   </section>
@@ -146,6 +190,7 @@
       </div>
     </div>
     <button class="btn big hidden" id="contBtn" type="button">Continue →</button>
+    <p class="muted small hidden" id="waitHost">Waiting for the host to continue…</p>
   </section>
 
   <!-- END / SONG OVER -->
@@ -171,6 +216,7 @@
     <button class="btn ghost" id="mChange" type="button">🎵 Change music</button>
     <button class="btn ghost" id="mEnd" type="button">🏁 End game &amp; see results</button>
     <button class="btn ghost danger" id="mQuit" type="button">🚪 Quit to home</button>
+    <button class="btn ghost" id="mClose" type="button">Close menu</button>
   </div>
 </div>
 <div id="toast" class="toast" role="status"></div>

@@ -15,7 +15,7 @@ const S = {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 const passMark = () => Math.min(75, 55 + (S.round - 1) * 5);
-const alive = () => S.players.filter((p) => p.lives > 0);
+const alive = () => S.players.filter((p) => p.lives > 0 && !p.gone); // gone = dropped out of an online room (may come back)
 
 let toastT;
 function toast(msg) {
@@ -27,6 +27,8 @@ function toast(msg) {
 function show(id) {
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === 's-' + id));
   const inGame = ['handoff', 'listen', 'turn', 'reveal'].includes(id);
+  if (S.net && id === 'song') $('#songBack').textContent = S.midGame && S.song ? '← Back to the game' : '← Lobby';
+  else if (id === 'song') $('#songBack').textContent = S.midGame && S.song ? '← Back to the game' : '← Players';
   $('#board').classList.toggle('hidden', !inGame);
   if (inGame) renderBoard();
   $('#ytwrap').classList.toggle('show', id === 'listen' || id === 'reveal');
@@ -40,7 +42,7 @@ function renderBoard() {
   $('#board').innerHTML =
     `<div class="board-top"><div class="songname">🎵 ${S.song ? esc(S.song.title) + ' · ' + esc(S.song.artist) : ''}</div>` +
     `<button class="menu-btn" type="button" data-menu aria-label="Pause menu">☰ Menu</button></div>` +
-    `<div class="pl">${S.players.map((p, i) => `<span class="pc ${i === S.cur ? 'cur' : ''} ${p.lives <= 0 ? 'out' : ''}"><b>${esc(p.name)}</b><span class="hearts">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span></span>`).join('')}</div>`;
+    `<div class="pl">${S.players.map((p, i) => `<span class="pc ${i === S.cur ? 'cur' : ''} ${p.lives <= 0 || p.gone ? 'out' : ''} ${S.net && p.id === S.net.me.id ? 'me' : ''}"><b>${esc(p.name)}</b><span class="hearts">${p.gone ? '👋' : p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span></span>`).join('')}</div>`;
 }
 
 // ---------- sound effects ----------
@@ -301,7 +303,7 @@ async function setSong({ title, artist, lyrics, ids }, fromStart = false) {
   const lines = parseLRC(lyrics);
   const sung = lines.filter((l) => l.words.length >= 3);
   if (sung.length < 4) throw new Error('Not enough lyrics in this one. Pick another.');
-  S.song = { title, artist, lines, ids, idx: 0 };
+  S.song = { title, artist, lines, ids, idx: 0, raw: { title, artist, lyrics, ids } };
   S.offset = savedOffset(ids[0]); updateSyncLabel();
   await ensurePlayer();
   player.cueVideoById(ids[0]);
@@ -346,6 +348,7 @@ function onYtError() {
       player.loadVideoById({ videoId: song.ids[song.idx], startSeconds: Math.max(0, S.playFrom - S.offset) });
     } else player.cueVideoById(song.ids[song.idx]);
   } else {
+    if (S.net && !S.net.host) return toast("This song won't play on your phone. Follow along on screen.");
     toast("This song won't play here. Skipping it.");
     S.phase = 'idle';
     if (S.mode === 'pack') nextPackSong(); else show('song');
@@ -364,10 +367,15 @@ const lyricTime = () => (player?.getCurrentTime?.() ?? 0) + S.offset;
 // ---------- game flow ----------
 function nextAlive(i) {
   const n = S.players.length;
-  for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (S.players[j].lives > 0) return j; }
+  for (let k = 1; k <= n; k++) { const j = (i + k) % n; if (S.players[j].lives > 0 && !S.players[j].gone) return j; }
   return -1;
 }
 function goHandoff() {
+  if (S.net) return hostRound();
+  $('#handLead').textContent = 'Pass the phone to';
+  $('#handHint').textContent = "Listen closely. When the music stops, it's your turn to carry on.";
+  $('#handCount').classList.add('hidden');
+  $('#readyBtn').classList.remove('hidden');
   $('#roundInfo').textContent = `Round ${S.round} · pass mark ${passMark()}%`;
   $('#handName').textContent = S.players[S.cur].name;
   $('#handSong').textContent = S.songTurns === 0 ? `🎵 ${S.mode === 'pack' ? 'Next song' : 'Song'}: ${S.song.title} · ${S.song.artist}` : '';
@@ -383,11 +391,15 @@ function skipSong() {
   S.phase = 'idle';
   toast(`Skipped “${S.song.title}”`);
   if (S.mode === 'pack') nextPackSong();
-  else { S.song = null; show('song'); }
+  else { S.song = null; if (S.net) S.net.send('picking'); show('song'); }
 }
 $('#skipSongBtn').onclick = skipSong;
 $('#skipSongBtn2').onclick = () => { if (S.phase === 'listen') skipSong(); };
 
+function sectionFrom(i, j) {
+  const L = S.song.lines, lines = L.slice(i, j);
+  return { i, j, start: L[i].t, end: lines[lines.length - 1].end, words: lines.flatMap((l) => l.words) };
+}
 // choose the next stretch of lyrics for the current player to sing
 function pickSection(from) {
   const L = S.song.lines;
@@ -410,12 +422,16 @@ $('#readyBtn').onclick = () => {
   const sec = pickSection(S.resumeAt);
   if (!sec) return songOver();
   S.section = sec;
+  startListen();
+};
+function startListen() {
   $('#listenName').textContent = S.players[S.cur].name;
+  $('#skipSongBtn2').classList.toggle('hidden', !!S.net && !S.net.host);
   lastKara = -2;
   show('listen');
   S.phase = 'listen';
   playFrom(S.resumeAt);
-};
+}
 $('#skipBtn').onclick = () => { if (S.phase === 'listen') playFrom(Math.max(S.resumeAt, S.section.start - 5)); };
 document.querySelectorAll('[data-sync]').forEach((b) => (b.onclick = () => { S.offset += +b.dataset.sync; updateSyncLabel(); saveOffset(); lastKara = -2; }));
 
@@ -487,7 +503,9 @@ function startTurn() {
   $('#heard').textContent = '';
   $('#timerBar').style.transform = 'scaleX(1)';
   $('#doneBtn').disabled = true;
+  $('#doneBtn').classList.toggle('hidden', !!S.net && !isMe(S.cur));
   show('turn');
+  if (S.net && !isMe(S.cur)) return spectate();
 
   const go = $('#goTxt');
   const steps = ['3', '2', '1'];
@@ -510,8 +528,10 @@ function beginListening() {
   S.heard = '';
   startRec(expected, (text) => {
     S.heard = text;
-    paintChips('#chips', align(expected, tokenize(text).map((w) => w.n)).sims, false);
+    const sims = align(expected, tokenize(text).map((w) => w.n)).sims;
+    paintChips('#chips', sims, false);
     $('#heard').textContent = text ? `👂 “${text}”` : '';
+    if (S.net) sendLive(sims, text);
   });
   $('#doneBtn').disabled = false;
   const t0 = performance.now();
@@ -546,26 +566,40 @@ function scoreTurn() {
   const sec = S.section;
   const r = align(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n));
   const pct = Math.round(r.score * 100);
-  const mark = passMark();
-  const verdict = !SR || S.micBlocked ? 'vote' : pct >= mark ? 'pass' : pct < mark - 15 ? 'fail' : 'vote';
-  S.result = { pct, verdict };
-
   const noMic = !SR || S.micBlocked;
-  $('#revChips').innerHTML = $('#chips').innerHTML;
+  if (S.net) {
+    const res = { pct, sims: r.sims, heard: S.heard, noMic };
+    S.phase = 'waiting';
+    $('#goTxt').className = 'go'; $('#goTxt').textContent = 'Scoring…';
+    if (S.net.host) hostJudge(res); else S.net.send('result', res);
+    return;
+  }
+  const mark = passMark();
+  const verdict = noMic ? 'vote' : pct >= mark ? 'pass' : pct < mark - 15 ? 'fail' : 'vote';
+  S.result = { pct, verdict };
+  showReveal({ pct, sims: r.sims, heard: S.heard, noMic, verdict }, () => {
+    if (verdict === 'vote') $('#voteBox').classList.remove('hidden');
+    else applyVerdict(verdict === 'pass');
+  });
+}
+
+// reveal screen: score, green/red words, and the real line played back
+function showReveal({ pct, sims, heard, noMic, verdict }, after) {
+  const sec = S.section;
+  $('#revChips').innerHTML = $('#chips').innerHTML || sec.words.map((w) => `<span class="w" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
   if (noMic) document.querySelectorAll('#revChips .w').forEach((el) => el.classList.add('show'));
-  else paintChips('#revChips', r.sims, true);
-  $('#revHeard').textContent = noMic ? 'Here are the real lyrics. Did they get it?' : S.heard ? `AI heard: “${S.heard}”` : 'AI heard: nothing 🤐';
+  else paintChips('#revChips', sims, true);
+  $('#revHeard').textContent = noMic ? 'Here are the real lyrics. Did they get it?' : heard ? `AI heard: “${heard}”` : 'AI heard: nothing 🤐';
   $('#voteBox').classList.add('hidden');
   $('#contBtn').classList.add('hidden');
+  $('#waitHost').classList.add('hidden');
   const v = $('#verdict');
   v.className = 'verdict'; v.textContent = '';
   show('reveal');
   if (noMic) $('#scoreNum').textContent = '🎤❓';
   (noMic ? (f) => f() : (f) => countUp($('#scoreNum'), pct, f))(() => {
-    if (verdict === 'vote') {
-      v.className = 'verdict vote'; v.textContent = noMic ? 'MIC IS OFF · ROOM DECIDES' : 'TOO CLOSE TO CALL 🤔';
-      $('#voteBox').classList.remove('hidden');
-    } else applyVerdict(verdict === 'pass');
+    if (verdict === 'vote') { v.className = 'verdict vote'; v.textContent = noMic ? 'MIC IS OFF · ROOM DECIDES' : 'TOO CLOSE TO CALL 🤔'; }
+    after();
   });
   // play the real line so the room hears what it should have been
   lastKara = -2;
@@ -582,31 +616,43 @@ function countUp(el, to, done) {
   })(t0);
 }
 
-function applyVerdict(pass) {
+// the score change itself (local game, or the online host)
+function applyResult(pass, pct) {
+  const p = S.players[S.cur];
+  if (!p || p.gone) return;
+  if (pass) { p.points += Math.max(pct, passMark()); p.passes++; }
+  else p.lives = Math.max(0, p.lives - 1);
+}
+function showVerdict(pass) {
   const p = S.players[S.cur], v = $('#verdict');
   if (pass) {
-    p.points += Math.max(S.result.pct, passMark()); p.passes++;
     v.className = 'verdict pass'; v.textContent = ['NAILED IT ✅', 'STAR! 🌟', 'CORRECT 🔥', 'ON KEY 🎤'][Math.floor(Math.random() * 4)];
     sfx.pass();
   } else {
-    p.lives--;
     v.className = 'verdict fail';
-    v.textContent = p.lives > 0 ? `LOST A LIFE 💔 ${p.lives} left` : `${p.name.toUpperCase()} IS OUT 💀`;
+    v.textContent = p.gone ? `${p.name.toUpperCase()} LEFT 👋` : p.lives > 0 ? `LOST A LIFE 💔 ${p.lives} left` : `${p.name.toUpperCase()} IS OUT 💀`;
     sfx.fail();
   }
   $('#voteBox').classList.add('hidden');
-  $('#contBtn').classList.remove('hidden');
+  const canContinue = !S.net || S.net.host;
+  $('#contBtn').classList.toggle('hidden', !canContinue);
+  $('#waitHost').classList.toggle('hidden', canContinue);
   renderBoard();
 }
-$('#votePass').onclick = () => applyVerdict(true);
-$('#voteFail').onclick = () => applyVerdict(false);
+function applyVerdict(pass) {
+  applyResult(pass, S.result.pct);
+  showVerdict(pass);
+}
+$('#votePass').onclick = () => (S.net ? castVote(true) : applyVerdict(true));
+$('#voteFail').onclick = () => (S.net ? castVote(false) : applyVerdict(false));
 
 $('#contBtn').onclick = () => {
   player.pauseVideo();
   S.phase = 'idle';
   S.resumeAt = S.section.end;
   const solo = S.players.length === 1, left = alive().length;
-  if ((solo && left === 0) || (!solo && left <= 1)) return endGame();
+  const standing = S.players.filter((p) => p.lives > 0).length; // includes anyone briefly disconnected
+  if ((solo && standing === 0) || (!solo && standing <= 1) || left === 0) return endGame();
   const prev = S.cur;
   S.cur = nextAlive(S.cur);
   if (S.cur <= prev) S.round++;
@@ -629,37 +675,72 @@ function endButtons(isFinal) {
   $('#newPlayers').classList.toggle('hidden', !isFinal);
 }
 function songOver() {
+  if (S.net && !S.net.host) return; // the host decides what plays next
   S.phase = 'idle';
   player?.pauseVideo?.();
   if (S.mode === 'pack') return nextPackSong();
+  if (S.net) { S.song = null; S.net.send('picking'); toast('Song over! Pick the next one 🎵'); return show('song'); }
   $('#endKicker').textContent = 'Song over 🎵';
   $('#endTitle').textContent = alive().length ? 'Still standing' : 'Everyone is out';
   renderRank(); endButtons(false);
   show('end');
 }
 function endGame(kicker = 'Game over') {
+  kicker = typeof kicker === 'string' ? kicker : 'Game over';
+  if (S.net?.host) S.net.send('end', { players: S.players, kicker });
+  showEnd(kicker);
+}
+function showEnd(kicker) {
   S.phase = 'idle';
+  stopRec(); clearInterval(turnTimer); clearInterval(countT);
   player?.pauseVideo?.();
   const top = standings()[0];
-  $('#endKicker').textContent = typeof kicker === 'string' ? kicker : 'Game over';
+  $('#endKicker').textContent = kicker;
   $('#endTitle').textContent = S.players.length === 1 ? `${top.points} points` : `👑 ${top.name} wins!`;
   renderRank(); endButtons(true);
+  if (S.net) {
+    $('#again').classList.toggle('hidden', !S.net.host);
+    $('#newPlayers').classList.add('hidden');
+    $('#endHome').textContent = S.net.host ? '🚪 Close room' : '🚪 Leave room';
+  } else $('#endHome').textContent = '🏠 Home';
   show('end');
   confetti();
 }
 $('#nextSong').onclick = () => { S.song = null; S.cur = nextAlive(S.cur); show('song'); };
 $('#endGame').onclick = endGame;
-$('#again').onclick = () => { resetScores(); S.midGame = false; show('song'); };
+$('#again').onclick = () => {
+  resetScores(); S.midGame = false;
+  if (S.net) { S.players = S.players.filter((p) => !p.gone); S.net.send('picking'); }
+  show('song');
+};
 $('#endHome').onclick = () => quitToHome();
 
 // ---------- navigation & pause menu ----------
 $('#playersBack').onclick = () => show('home');
-$('#songBack').onclick = () => (S.midGame && S.song ? goHandoff() : show('players'));
+$('#songBack').onclick = () => {
+  if (S.midGame && S.song) return goHandoff();
+  if (S.net) { S.started = false; S.net.send('lobby'); return show('lobby'); }
+  show('players');
+};
 $('#board').onclick = (e) => { if (e.target.closest('[data-menu]')) openMenu(); };
 
 let pausedPhase = null;
 function openMenu() {
   if (!$('#menu').classList.contains('hidden')) return;
+  if (S.net) { // online: the game keeps going for everyone; host gets controls, guests can leave
+    const host = S.net.host;
+    $('#menuTitle').textContent = `Room ${S.net.code}`;
+    for (const id of ['#mResume', '#mSkip', '#mChange', '#mEnd']) $(id).classList.toggle('hidden', !host);
+    $('#mResume').classList.add('hidden');
+    $('#mSkip').classList.toggle('hidden', !host || !S.song);
+    $('#mQuit').textContent = host ? '🚪 Close the room' : '🚪 Leave room';
+    $('#mClose').classList.remove('hidden');
+    return $('#menu').classList.remove('hidden');
+  }
+  $('#menuTitle').textContent = 'Game paused';
+  for (const id of ['#mResume', '#mChange', '#mEnd']) $(id).classList.remove('hidden');
+  $('#mQuit').textContent = '🚪 Quit to home';
+  $('#mClose').classList.add('hidden');
   pausedPhase = S.phase;
   player?.pauseVideo?.();
   if (S.phase === 'turn' || S.phase === 'scoring') { clearInterval(turnTimer); clearInterval(countT); stopRec(); }
@@ -676,10 +757,16 @@ $('#mResume').onclick = () => {
   else S.phase = p || 'idle';
 };
 $('#mSkip').onclick = () => { closeMenu(); pausedPhase = null; skipSong(); };
-$('#mChange').onclick = () => { closeMenu(); pausedPhase = null; S.phase = 'idle'; S.midGame = true; show('song'); };
+$('#mChange').onclick = () => {
+  closeMenu(); pausedPhase = null; S.phase = 'idle'; S.midGame = true;
+  if (S.net) { player?.pauseVideo?.(); S.net.send('picking'); }
+  show('song');
+};
+$('#mClose').onclick = closeMenu;
 $('#mEnd').onclick = () => { closeMenu(); pausedPhase = null; endGame(); };
 $('#mQuit').onclick = () => { closeMenu(); pausedPhase = null; quitToHome(); };
 function quitToHome() {
+  if (S.net) leaveRoom();
   stopRec(); clearInterval(turnTimer); clearInterval(countT);
   player?.pauseVideo?.();
   S.phase = 'idle'; S.song = null; S.midGame = false;
@@ -694,9 +781,358 @@ addEventListener('popstate', () => {
     if ($('#menu').classList.contains('hidden')) openMenu(); else $('#mResume').click();
     history.pushState({ ptm: 'guard' }, '');
   } else if (cur === 'song') $('#songBack').click();
+  else if (cur === 'lobby' || (S.net && cur === 'end')) { quitToHome(); }
   else if (cur !== 'home') show('home');
 });
 $('#newPlayers').onclick = () => { renderPlayers(); show('players'); };
+
+
+// ---------- online multiplayer ----------
+// The host's phone runs the game and broadcasts every decision. Each phone plays the music itself and
+// cuts at the same lyric line; the singer's phone listens and streams their words to everyone else.
+import('./net.js').then((m) => (NET = m));
+let NET;
+const ME = (() => {
+  let id; try { id = sessionStorage.getItem('ptm-id'); } catch {}
+  if (!id) { id = (crypto.randomUUID?.() || String(Math.random()).slice(2)); try { sessionStorage.setItem('ptm-id', id); } catch {} }
+  return { id };
+})();
+const isMe = (i) => !!S.net && S.players[i]?.id === S.net.me.id;
+const roomLink = (code) => `${location.origin}${location.pathname}?room=${code}`;
+try { $('#myName').value = localStorage.getItem('ptm-name') || ''; } catch {}
+
+$('#onlineBtn').onclick = () => { unlockAudio(); show('online'); ensurePlayer().catch(() => {}); };
+$('#onlineBack').onclick = () => show('home');
+const roomParam = new URLSearchParams(location.search).get('room');
+if (roomParam) { $('#joinCode').value = roomParam.toUpperCase().slice(0, 4); show('online'); ensurePlayer().catch(() => {}); }
+
+function myName() {
+  const n = $('#myName').value.trim();
+  if (!n) { $('#onlineStatus').textContent = 'Type your name first 👆'; $('#myName').focus(); return null; }
+  try { localStorage.setItem('ptm-name', n); } catch {}
+  return n;
+}
+async function connect(code, host) {
+  if (!NET) NET = await import('./net.js');
+  const me = { id: ME.id, name: S.myName };
+  const room = await NET.openRoom(code, me, { onMsg, onPresence });
+  S.net = { ...room, code, me, host };
+  return room;
+}
+$('#createRoom').onclick = async () => {
+  const name = myName(); if (!name) return;
+  S.myName = name;
+  $('#onlineStatus').textContent = 'Creating your room…';
+  try {
+    for (let tries = 0; tries < 4; tries++) {
+      const code = NET?.newCode?.() || (await import('./net.js')).newCode();
+      const room = await connect(code, true);
+      await room.track({ id: ME.id, name, host: true, ready: false, at: Date.now() });
+      await new Promise((r) => setTimeout(r, 1200)); // make sure nobody else already hosts this code
+      if (!room.members().some((m) => m.host && m.id !== ME.id)) return enterLobby();
+      room.leave(); S.net = null;
+    }
+    throw new Error('Could not create a room. Try again.');
+  } catch (e) { $('#onlineStatus').textContent = e.message; S.net = null; }
+};
+$('#joinForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const name = myName(); if (!name) return;
+  const code = $('#joinCode').value.trim().toUpperCase();
+  if (code.length !== 4) { $('#onlineStatus').textContent = 'Room codes have 4 characters.'; return; }
+  S.myName = name;
+  $('#onlineStatus').textContent = `Joining ${code}…`;
+  try {
+    const room = await connect(code, false);
+    // presence is only shared once you've announced yourself, so announce first, then look for the host
+    await room.track({ id: ME.id, name, host: false, ready: false, at: Date.now() });
+    const t0 = Date.now();
+    while (!room.members().some((m) => m.host) && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 200));
+    if (!room.members().some((m) => m.host)) { room.leave(); S.net = null; $('#onlineStatus').textContent = `No room called ${code}. Check the code with your friend.`; return; }
+    enterLobby();
+  } catch (err) { $('#onlineStatus').textContent = err.message; S.net = null; }
+};
+
+function enterLobby() {
+  $('#onlineStatus').textContent = '';
+  $('#roomCode').textContent = S.net.code;
+  $('#livesWrap').classList.toggle('hidden', !S.net.host);
+  $('#lobbyStart').classList.toggle('hidden', !S.net.host);
+  $('#readyUp').classList.remove('on'); $('#readyUp').textContent = '🎧 Tap when ready (turns on sound + mic)';
+  S.started = false; S.players = []; S.mode = 'single'; S.song = null; S.songKey = null;
+  history.replaceState(history.state, '', `?room=${S.net.code}`);
+  show('lobby');
+  renderLobby(S.net.members());
+}
+function renderLobby(members) {
+  if (!S.net) return;
+  const host = members.find((m) => m.host);
+  $('#lobbyCount').textContent = `Players · ${members.length}`;
+  $('#lobbyList').innerHTML = members.map((m) => `<li><span class="nm">${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}</span>${m.host ? '<span class="tag">👑 host</span>' : ''}${m.ready ? '<span class="ok">✓ ready</span>' : '<span class="tag">not ready</span>'}</li>`).join('');
+  const ready = members.filter((m) => m.ready).length;
+  if (S.net.host) $('#lobbyStatus').textContent = members.length < 2 ? 'Share the code. Your friends join from their own phones.' : `${ready}/${members.length} ready`;
+  else if (!S.started && !$('#lobbyStatus').dataset.picking) $('#lobbyStatus').textContent = host ? `Waiting for ${host.name} to pick the music…` : '';
+}
+$('#shareRoom').onclick = async () => {
+  const url = roomLink(S.net.code), text = `Join my Pass The Mic room 🎤 Code: ${S.net.code}`;
+  try { if (navigator.share) return await navigator.share({ title: 'Pass The Mic', text, url }); } catch { return; }
+  try { await navigator.clipboard.writeText(`${text}\n${url}`); toast('Invite link copied. Paste it in your group chat'); } catch { toast(url); }
+};
+// one tap that unlocks sound (YouTube) and asks for the mic, so later turns can start by themselves
+$('#readyUp').onclick = async () => {
+  unlockAudio();
+  S.lang = $('#lobbyLang').value;
+  primePlayer();
+  if (SR) { startRec(null, () => {}); setTimeout(stopRec, 1500); }
+  $('#readyUp').classList.add('on'); $('#readyUp').textContent = '✓ Ready! Sound and mic are on';
+  S.net?.track({ ready: true });
+};
+$('#lobbyLang').onchange = () => { S.lang = $('#lobbyLang').value; };
+function primePlayer() {
+  if (!player?.playVideo) return;
+  try {
+    player.mute();
+    player.loadVideoById({ videoId: S.song?.ids?.[0] || '2cNFrajBk0k', startSeconds: 0 });
+    setTimeout(() => { player.pauseVideo(); player.unMute(); }, 700);
+  } catch {}
+}
+$('#lobbyStart').onclick = () => {
+  unlockAudio(); primePlayer();
+  S.lang = $('#lobbyLang').value;
+  S.net.track({ ready: true });
+  S.lives = +$('#lobbyLives').value;
+  S.players = S.net.members().map((m) => ({ id: m.id, name: m.name }));
+  resetScores();
+  S.started = true; S.midGame = false;
+  S.net.send('picking');
+  show('song');
+};
+$('#lobbyBack').onclick = () => quitToHome();
+
+function leaveRoom() {
+  if (!S.net) return;
+  if (S.net.host) S.net.send('bye');
+  clearTimeout(hostGoneT); clearTimeout(voteT); clearTimeout(watchdogT);
+  S.net.leave();
+  S.net = null; S.started = false; S.players = [];
+  history.replaceState(history.state, '', location.pathname);
+}
+
+// ---- presence: who's here
+let hostGoneT;
+function onPresence(members) {
+  if (!S.net) return;
+  if ($('#s-lobby').classList.contains('active')) renderLobby(members);
+  if (S.net.host) return hostSyncPlayers(members);
+  // guests: if the host disappears for a while, the room is over
+  if (members.some((m) => m.host)) clearTimeout(hostGoneT);
+  else { clearTimeout(hostGoneT); hostGoneT = setTimeout(() => { toast('The host left, so the room closed.'); quitToHome(); }, 8000); }
+}
+function hostSyncPlayers(members) {
+  if (!S.started) return;
+  const here = new Set(members.map((m) => m.id));
+  let changed = false, newcomer = false, singerLeft = false;
+  for (const m of members) {
+    const p = S.players.find((x) => x.id === m.id);
+    if (!p) { S.players.push({ id: m.id, name: m.name, lives: S.lives, points: 0, passes: 0 }); changed = newcomer = true; }
+    else if (p.gone) { p.gone = false; changed = newcomer = true; } // came back (lives stay as they were)
+  }
+  for (const p of S.players) {
+    if (here.has(p.id) || p.gone) continue;
+    p.gone = true; changed = true; // keeps their lives: a dropped connection shouldn't knock you out
+    if (p === S.players[S.cur] && ['countin', 'listen', 'spectate', 'turn', 'scoring'].includes(S.phase)) singerLeft = true;
+  }
+  if (!changed) return;
+  S.net.send('players', { players: S.players });
+  if (newcomer && S.song) sendSong();
+  renderBoard();
+  if (singerLeft) hostJudge({ pct: 0, sims: [], heard: '', noMic: false });
+  if (S.voting) maybeDecide();
+}
+
+// ---- messages
+function onMsg(m) {
+  if (!S.net) return;
+  const fromHost = !S.net.host;
+  switch (m.t) {
+    case 'picking': if (fromHost) guestPicking(); break;
+    case 'lobby': if (fromHost) { S.started = false; delete $('#lobbyStatus').dataset.picking; stopAll(); show('lobby'); renderLobby(S.net.members()); } break;
+    case 'song': if (fromHost) handleSong(m); break;
+    case 'round': if (fromHost) handleRound(m); break;
+    case 'players': if (fromHost) { S.players = m.players; S.cur = S.players.findIndex((p) => p.id === S.curId); renderBoard(); } break;
+    case 'live': if (m.from !== ME.id) { S.live = m; if (S.phase === 'spectate') paintLive(m); } break;
+    case 'result': if (S.net.host && m.from === S.players[S.cur]?.id) hostJudge(m); break;
+    case 'verdict': if (fromHost) handleVerdict(m); break;
+    case 'vote': if (S.net.host) hostVote(m.from, m.pass); break;
+    case 'decided': if (fromHost) handleDecided(m); break;
+    case 'end': if (fromHost) { S.players = m.players; showEnd(m.kicker); } break;
+    case 'bye': if (fromHost) { toast('The host closed the room.'); quitToHome(); } break;
+  }
+}
+function stopAll() {
+  stopRec(); clearInterval(turnTimer); clearInterval(countT); clearInterval(countInT); clearInterval(specT);
+  player?.pauseVideo?.();
+  S.phase = 'idle';
+}
+function guestPicking() {
+  stopAll();
+  S.started = true;
+  $('#lobbyStatus').dataset.picking = '1';
+  $('#lobbyStatus').textContent = '🎵 The host is picking the music…';
+  show('lobby');
+  renderLobby(S.net.members());
+}
+
+// ---- host: send song + start rounds
+function sendSong() {
+  S.net.send('song', { key: S.songKey, song: S.song.raw, mode: S.mode, pack: S.pack, players: S.players });
+}
+function hostRound() {
+  const key = `${S.song.ids[0]}:${S.qi}:${S.mode}`;
+  if (S.songKey !== key) { S.songKey = key; sendSong(); }
+  const sec = pickSection(S.resumeAt);
+  if (!sec) return songOver();
+  const m = { cur: S.players[S.cur].id, round: S.round, resumeAt: S.resumeAt, i: sec.i, j: sec.j, players: S.players, fresh: S.songTurns === 0 };
+  S.net.send('round', m);
+  handleRound(m);
+}
+
+// ---- everyone: load song, count in, listen
+function handleSong(m) {
+  if (S.songKey === m.key && S.song) return;
+  stopAll();
+  S.songKey = m.key; S.mode = m.mode; S.pack = m.pack; S.players = m.players;
+  $('#handLead').textContent = 'Get ready';
+  $('#handName').textContent = '🎵';
+  $('#handSong').textContent = 'Loading the next song…';
+  $('#handHint').textContent = '';
+  $('#handCount').classList.add('hidden');
+  $('#readyBtn').classList.add('hidden'); $('#skipSongBtn').classList.add('hidden');
+  show('handoff');
+  S.songLoading = setSong(m.song).then(() => {
+    if (S.phase !== 'idle' || !$('#s-handoff').classList.contains('active')) return;
+    $('#handSong').textContent = `🎵 ${S.song.title} · ${S.song.artist}`;
+    $('#handHint').textContent = "You'll jump in on the next turn.";
+  }).catch((e) => { console.warn(e); toast("Couldn't load this song."); });
+}
+let countInT;
+async function handleRound(m) {
+  await S.songLoading;
+  if (!S.song || !S.net) return;
+  stopAll();
+  S.players = m.players; S.curId = m.cur;
+  S.cur = S.players.findIndex((p) => p.id === m.cur);
+  S.round = m.round; S.resumeAt = m.resumeAt; S.live = null; S.judged = false;
+  S.section = sectionFrom(m.i, m.j);
+  $('#chips').innerHTML = ''; $('#heard').textContent = '';
+  const me = isMe(S.cur), name = S.players[S.cur]?.name || '';
+  $('#roundInfo').textContent = `Round ${S.round} · pass mark ${passMark()}%`;
+  $('#handLead').textContent = me ? "You're up next" : 'Up next';
+  $('#handName').textContent = me ? 'YOU 🎤' : name;
+  $('#handSong').textContent = m.fresh ? `🎵 ${S.song.title} · ${S.song.artist}` : '';
+  $('#handHint').textContent = me ? 'Listen closely. When the music stops, carry on singing.' : `Listen along. When the music stops, ${name} has to carry on.`;
+  $('#readyBtn').classList.add('hidden'); $('#skipSongBtn').classList.add('hidden');
+  const c = $('#handCount'); c.classList.remove('hidden');
+  show('handoff');
+  S.phase = 'countin';
+  let n = 3;
+  c.textContent = `Starting in ${n}…`;
+  clearInterval(countInT);
+  countInT = setInterval(() => {
+    if (S.phase !== 'countin') return clearInterval(countInT);
+    if (--n > 0) { c.textContent = `Starting in ${n}…`; return; }
+    clearInterval(countInT);
+    startListen();
+  }, 1000);
+}
+
+// ---- everyone else watches the singer
+let specT, watchdogT;
+function spectate() {
+  S.phase = 'spectate';
+  const go = $('#goTxt');
+  go.className = 'go count'; go.textContent = 'IS SINGING 🎤';
+  sfx.go();
+  const sec = S.section, dur = Math.max(5, (sec.end - sec.start) * 1.35 + 2.5) + 2.4, t0 = performance.now();
+  clearInterval(specT);
+  specT = setInterval(() => {
+    const f = 1 - (performance.now() - t0) / 1000 / dur;
+    $('#timerBar').style.transform = `scaleX(${Math.max(0, f)})`;
+    if (f <= 0) clearInterval(specT);
+  }, 100);
+  if (S.live) paintLive(S.live);
+  if (S.net.host) { // singer's phone went quiet? don't stall the game
+    clearTimeout(watchdogT);
+    watchdogT = setTimeout(() => { if (S.phase === 'spectate') hostJudge({ pct: 0, sims: [], heard: '', noMic: true }); }, (dur + 12) * 1000);
+  }
+}
+function paintLive(m) {
+  paintChips('#chips', m.sims || [], false);
+  $('#heard').textContent = m.heard ? `👂 “${m.heard}”` : '';
+}
+let liveAt = 0, liveT;
+function sendLive(sims, heard) {
+  clearTimeout(liveT);
+  const wait = 300 - (Date.now() - liveAt);
+  const go = () => { liveAt = Date.now(); S.net?.send('live', { sims, heard }); };
+  if (wait <= 0) go(); else liveT = setTimeout(go, wait);
+}
+
+// ---- host decides; everyone shows the reveal
+function hostJudge(res) {
+  if (S.judged) return;
+  S.judged = true;
+  clearTimeout(watchdogT);
+  const mark = passMark();
+  const verdict = res.noMic ? 'vote' : res.pct >= mark ? 'pass' : res.pct < mark - 15 ? 'fail' : 'vote';
+  S.lastPct = res.pct;
+  if (verdict !== 'vote') applyResult(verdict === 'pass', res.pct);
+  const m = { pct: res.pct, sims: res.sims, heard: res.heard, noMic: res.noMic, verdict, pass: verdict === 'pass', players: S.players };
+  S.net.send('verdict', m);
+  handleVerdict(m);
+  if (verdict === 'vote') openVoting();
+}
+function handleVerdict(m) {
+  if (!S.section || !S.song) { S.players = m.players; return renderBoard(); } // joined mid-turn: catch up next round
+  clearInterval(specT); clearInterval(turnTimer); clearInterval(countT); stopRec();
+  S.players = m.players; S.cur = S.players.findIndex((p) => p.id === S.curId);
+  S.result = { pct: m.pct, verdict: m.verdict };
+  if (!$('#chips').innerHTML) $('#chips').innerHTML = S.section.words.map((w) => `<span class="w" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
+  showReveal(m, () => {
+    if (m.verdict !== 'vote') return showVerdict(m.pass);
+    const meVoter = !isMe(S.cur) && S.players.some((p) => p.id === ME.id && !p.gone);
+    $('#voteBox').classList.toggle('hidden', !meVoter);
+    if (!meVoter) { $('#verdict').textContent = '🗳️ The room is voting…'; }
+  });
+}
+function castVote(pass) {
+  $('#voteBox').classList.add('hidden');
+  $('#verdict').className = 'verdict vote'; $('#verdict').textContent = 'Vote sent ✓ waiting for the others…';
+  if (S.net.host) hostVote(ME.id, pass); else S.net.send('vote', { pass });
+}
+let voteT;
+function openVoting() {
+  S.voting = true; S.votes = new Map();
+  maybeDecide();
+  clearTimeout(voteT);
+  voteT = setTimeout(() => { if (S.voting) decide(); }, 15000);
+}
+const voters = () => S.players.filter((p) => !p.gone && p.id !== S.players[S.cur]?.id).map((p) => p.id);
+function hostVote(id, pass) { if (S.voting && voters().includes(id)) { S.votes.set(id, pass); maybeDecide(); } }
+function maybeDecide() { if (S.voting && voters().every((id) => S.votes.has(id))) decide(); }
+function decide() {
+  S.voting = false; clearTimeout(voteT);
+  const yes = [...S.votes.values()].filter(Boolean).length, no = S.votes.size - yes;
+  const pass = yes >= no; // ties (and nobody voting) go to the singer
+  applyResult(pass, S.lastPct);
+  const m = { pass, players: S.players };
+  S.net.send('decided', m);
+  handleDecided(m);
+}
+function handleDecided(m) {
+  S.players = m.players; S.cur = S.players.findIndex((p) => p.id === S.curId);
+  showVerdict(m.pass);
+}
 
 // ---------- speech recognition ----------
 let rec = null, recOn = false;

@@ -4,6 +4,18 @@ The sing-the-next-line party game, with an AI referee.
 
 Pick any song, pass one phone around. The music plays with lyrics on screen, then **suddenly cuts out** and the lyrics vanish. Whoever's holding the phone has to carry on singing from memory. The AI listens and scores how close they got. Miss it, and you lose a life. The last one singing wins.
 
+## Play online
+
+Tap **🌍 Play online with friends**, create a room and share the 4-letter code or invite link. Everyone plays on their own phone:
+
+- the **host's phone runs the game**: it picks the music, chooses who sings, keeps score and runs votes
+- every phone **plays the music itself** and cuts out at the same lyric line
+- the singer's phone listens; everyone else sees their words light up live
+- close calls: everyone votes on their own phone, majority wins (ties go to the singer)
+- dropped connection? You keep your lives and jump back in when you reconnect
+
+Rooms use Supabase Realtime (broadcast + presence) in `net.js`; there are no database tables.
+
 ## Any song
 
 Search YouTube Music's whole catalog (`api/search.js`). Tap ▶ Play to play one song now, or + Add to build the room's own playlist. Each pick is checked for time-synced lyrics as it's added, so you know right away whether it's playable.
