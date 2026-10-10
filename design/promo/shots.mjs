@@ -1,0 +1,14 @@
+import { createRequire } from 'node:module';
+const require = createRequire(process.env.PUPPETEER_FROM + '/');
+const puppeteer = require('puppeteer-core');
+const b = await puppeteer.launch({ executablePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', headless: 'new' });
+const p = await b.newPage();
+await p.setViewport({ width: 1080, height: 1350 });
+await p.goto('file://' + process.cwd() + '/li-bg.html', { waitUntil: 'networkidle0' });
+await p.evaluate(() => document.fonts.ready);
+await p.screenshot({ path: 'li-bg.png' });
+await p.setViewport({ width: 640, height: 1138 });
+await p.goto('file://' + process.cwd() + '/mask.html');
+await p.screenshot({ path: 'mask.png' });
+await b.close();
+console.log('ok');
