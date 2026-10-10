@@ -251,6 +251,8 @@
     <div class="who" id="endTitle"></div>
     <ol class="rank" id="rank"></ol>
     <div class="col">
+      <button class="btn reel big hidden" id="reelBtn" type="button">🎬 MAKE HIGHLIGHT REEL</button>
+      <p class="muted small hidden center-text" id="reelNote">Made from the singing on this phone. Nothing is uploaded unless you share it.</p>
       <button class="btn hot big" id="nextSong" type="button">NEXT SONG 🎵</button>
       <button class="btn hot big" id="again" type="button">PLAY AGAIN 🔁</button>
       <button class="btn ghost" id="endGame" type="button">End game</button>
@@ -324,6 +326,23 @@
     <button class="btn ghost" id="mEnd" type="button">🏁 End game &amp; see results</button>
     <button class="btn ghost danger" id="mQuit" type="button">🚪 Quit to home</button>
     <button class="btn ghost" id="mClose" type="button">Close menu</button>
+  </div>
+</div>
+<div id="reelSheet" class="sheet hidden" role="dialog" aria-modal="true" aria-label="Highlight reel">
+  <div class="sheet-card reel-card">
+    <div id="reelMaking" class="center-text">
+      <p class="kicker">Cutting your highlight reel 🎬</p>
+      <p class="muted small">Keep this screen open, it takes about as long as the clips.</p>
+      <div class="reel-bar"><i id="reelBar"></i></div>
+    </div>
+    <div id="reelReady" class="hidden">
+      <video id="reelVideo" playsinline controls loop></video>
+      <div class="row">
+        <button class="btn hot" id="reelShare" type="button">📤 SHARE</button>
+        <button class="btn ghost" id="reelSave" type="button">⬇ Save</button>
+      </div>
+    </div>
+    <button class="btn ghost" id="reelClose" type="button">Close</button>
   </div>
 </div>
 <div id="toast" class="toast" role="status"></div>

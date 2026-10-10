@@ -190,7 +190,7 @@ $('#micTest').onclick = () => {
   setTimeout(() => { stopRec(); if (!got) $('#micOut').textContent = S.micBlocked ? $('#toast').textContent : "Didn't hear anything. Speak up, or check the mic permission and try again."; }, 4500);
 };
 function resetScores() {
-  S.recorded = false;
+  S.recorded = false; S.clips = [];
   S.players.forEach((p) => { p.lives = S.lives; p.points = 0; p.passes = 0; });
   S.round = 1; S.cur = 0;
 }
@@ -841,6 +841,7 @@ function stamp(text, kind) {
 }
 function showVerdict(pass) {
   const p = S.players[S.cur], v = $('#verdict');
+  keepClip(p, pass);
   if (pass) {
     stamp('PASS', 'pass');
     v.className = 'verdict pass'; v.textContent = ['NAILED IT 🔥', 'STAR BEHAVIOUR 🌟', 'CORRECT! 🎤', 'ON KEY ✨'][Math.floor(Math.random() * 4)];
@@ -859,6 +860,20 @@ function showVerdict(pass) {
   $('#waitHost').classList.toggle('hidden', canContinue);
   renderBoard();
   if (canContinue) startAutoNext();
+}
+
+// remember this turn for the highlight reel (only turns sung on this phone have audio)
+function keepClip(p, pass) {
+  const blob = S.lastAudio;
+  S.lastAudio = null;
+  if (!blob || !p || !S.section || (S.net && !isMe(S.cur))) return;
+  S.clips ??= [];
+  S.clips.push({
+    name: p.name, c: p.c, f: p.f, photo: p.photo, pass, round: S.round, at: Date.now(),
+    lyric: S.section.words.map((w) => w.d).join(' '), heard: S.heard, pct: S.result?.pct ?? 0,
+    song: S.song ? `${S.song.title} · ${S.song.artist}` : '', blob,
+  });
+  if (S.clips.length > 30) S.clips.shift();
 }
 
 // what the Continue button leads to (mirrors the #contBtn logic, without changing anything)
@@ -970,6 +985,7 @@ function showEnd(kicker) {
   sfx.pass();
   renderRank(); endButtons(true);
   recordResult();
+  offerReel();
   if (S.net) {
     $('#again').classList.toggle('hidden', !S.net.host);
     $('#newPlayers').classList.add('hidden');
@@ -1187,7 +1203,7 @@ $('#lobbyStart').onclick = () => {
   S.net.track({ ready: true });
   S.lives = +$('#lobbyLives').value;
   S.players = S.net.members().map((m, i) => dress({ id: m.id, name: m.name, photo: m.photo, uid: m.uid, c: m.c, f: m.f }, i));
-  S.recorded = false;
+  S.recorded = false; S.clips = [];
   resetScores();
   S.started = true; S.midGame = false;
   S.net.send('picking');
@@ -1310,7 +1326,7 @@ async function handleRound(m) {
   S.players = m.players; S.curId = m.cur;
   S.cur = S.players.findIndex((p) => p.id === m.cur);
   S.round = m.round; S.resumeAt = m.resumeAt; S.live = null; S.judged = false;
-  if (m.round === 1 && m.fresh) S.recorded = false;
+  if (m.round === 1 && m.fresh) { S.recorded = false; S.clips = []; }
   S.section = sectionFrom(m.i, m.j);
   $('#chips').innerHTML = ''; $('#heard').textContent = '';
   const me = isMe(S.cur), name = S.players[S.cur]?.name || '';
@@ -1556,6 +1572,8 @@ function stopCloudRec(abort = false) {
       const work = (async () => { while (st.inflight) await new Promise((r) => setTimeout(r, 80)); await pump(st, true); })();
       await Promise.race([work, new Promise((r) => setTimeout(r, 7000))]);
       S.cloudFailed = st.ok === 0;
+      // keep this turn's singing for the highlight reel (never uploaded unless the player shares the reel)
+      S.lastAudio = st.voiced >= 400 && st.chunks.length ? new Blob(st.chunks, { type: st.mime }) : null;
       resolve(st.text);
     };
     if (st.mr.state !== 'inactive') { st.mr.onstop = finish; st.mr.stop(); } else finish();
@@ -1793,6 +1811,50 @@ async function recordResult() {
   } catch { S.recorded = false; note.textContent = "Couldn't save this game's score."; }
 }
 initAuth();
+
+// ---------- highlight reel ----------
+let reelMod = null, reelOut = null;
+const loadReel = async () => (reelMod ??= await import('./reel.js'));
+async function offerReel() {
+  const m = await loadReel().catch(() => null);
+  const ok = !!(m && m.reelSupported() && S.clips?.some((c) => c.blob));
+  $('#reelBtn').classList.toggle('hidden', !ok);
+  $('#reelNote').classList.toggle('hidden', !ok);
+}
+$('#reelBtn').onclick = async () => {
+  const m = await loadReel();
+  const sheet = $('#reelSheet');
+  sheet.classList.remove('hidden');
+  $('#reelMaking').classList.remove('hidden'); $('#reelReady').classList.add('hidden');
+  $('#reelBar').style.transform = 'scaleX(0)';
+  try {
+    reelOut = await m.makeReel(S.clips, { onProgress: (k) => { $('#reelBar').style.transform = `scaleX(${k})`; }, title: S.players.length > 1 ? 'GAME NIGHT HIGHLIGHTS' : 'MY HIGHLIGHTS' });
+    const v = $('#reelVideo');
+    if (v.src) URL.revokeObjectURL(v.src);
+    v.src = URL.createObjectURL(reelOut.blob);
+    $('#reelMaking').classList.add('hidden'); $('#reelReady').classList.remove('hidden');
+    v.play().catch(() => {});
+  } catch (e) {
+    console.warn(e); sheet.classList.add('hidden'); toast("Couldn't make the reel on this phone. Try Chrome or Safari.");
+  }
+};
+$('#reelShare').onclick = async () => {
+  if (!reelOut) return;
+  const file = new File([reelOut.blob], `pass-the-mic-highlights.${reelOut.ext}`, { type: reelOut.blob.type });
+  try {
+    if (navigator.canShare?.({ files: [file] })) return await navigator.share({ files: [file], title: 'Pass The Mic', text: 'Game night on Pass The Mic 🎤😂 Think you can do better? pass-the-mic.vercel.app' });
+  } catch (e) { if (e.name === 'AbortError') return; }
+  downloadReel(file);
+};
+$('#reelSave').onclick = () => reelOut && downloadReel(new File([reelOut.blob], `pass-the-mic-highlights.${reelOut.ext}`, { type: reelOut.blob.type }));
+function downloadReel(file) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(file); a.download = file.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast('Saved! Share it anywhere 🎬');
+}
+$('#reelClose').onclick = () => { $('#reelVideo').pause(); $('#reelSheet').classList.add('hidden'); };
 
 // ---------- installable app (PWA) ----------
 if ('serviceWorker' in navigator && location.hostname !== 'localhost') navigator.serviceWorker.register('/sw.js').catch(() => {});
