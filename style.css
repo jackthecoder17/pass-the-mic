@@ -378,6 +378,9 @@ body.cutting #app { animation: shake .45s; }
 .leaders .pts { font: 400 22px var(--poster); color: var(--gold); }
 #savedNote { text-align: center; min-height: 18px; }
 
+.legal { text-align: center; font-size: 12.5px; color: var(--dim); }
+.legal a { color: var(--dim); }
+
 /* keyboard focus */
 :focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
 .btn:focus-visible, .chip:focus-visible, .pack:focus-visible { outline-offset: 3px; }
