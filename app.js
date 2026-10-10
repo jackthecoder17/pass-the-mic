@@ -1624,20 +1624,91 @@ const getSB = async () => SB || (SB = await (await import('./net.js')).sb());
 const meAsPlayer = () => ({ name: ACCT.profile.display_name.slice(0, 14), uid: ACCT.id, photo: ACCT.profile.avatar_url, c: ACCT.profile.color || 1, f: ACCT.profile.face || '😎' });
 const myLook = () => (ACCT ? { uid: ACCT.id, photo: ACCT.profile.avatar_url || null, c: ACCT.profile.color || 1, f: ACCT.profile.face || '😎' } : {});
 
+// Installed app (home screen): Google sign-in can finish in a separate browser sheet with its own storage,
+// so the sheet hands the one-time sign-in code back to the app over a private channel (the app holds the PKCE key).
+const STANDALONE = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const SB_TOKEN = 'sb-rwpscifwaaislizubdtz-auth-token';
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} } };
+let googleOn = null;
+
 async function initAuth() {
+  // show the signed-in chip straight away from the last known profile, then confirm with Supabase
+  try { const c = JSON.parse(store.get('ptm-acct')); if (c?.id && store.get(SB_TOKEN)) { ACCT = { ...c, cached: true }; renderAcct(); } } catch {}
+  navigator.storage?.persist?.().catch(() => {});
   try {
     const c = await getSB();
-    const { data } = await c.auth.getSession();
-    await setSession(data.session, false);
+    import('./net.js').then((m) => m.providers()).then((p) => (googleOn = !!p.google)).catch(() => {});
+    const q = new URLSearchParams(location.search), code = q.get('code'), relay = q.get('relay');
+    if (code || q.get('error')) history.replaceState(null, '', location.pathname + location.hash);
+    if (code) {
+      // finish here if this window started the sign-in; otherwise (or if that fails) hand the code to the app
+      const mine = relay ? store.get('ptm-relay') === relay : true;
+      const local = mine && store.get(SB_TOKEN + '-code-verifier') && !(await c.auth.exchangeCodeForSession(code)).error;
+      if (!local && relay) return relayCode(c, relay, code);
+      if (!local) toast("Sign-in didn't finish. Try again.");
+    }
+    await syncSession(c);
     // (supabase-js: don't await other calls inside this callback)
     c.auth.onAuthStateChange((evt, session) => setTimeout(() => setSession(session, evt === 'SIGNED_IN'), 0));
+    const pending = store.get('ptm-relay');
+    if (pending) listenRelay(c, pending);
+    // another window on this device (e.g. the sign-in tab) may have signed in: pick it up when we come back
+    addEventListener('storage', (e) => e.key === SB_TOKEN && syncSession(c));
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { syncSession(c); const p = store.get('ptm-relay'); if (p) listenRelay(c, p); } });
   } catch (e) { console.warn('accounts unavailable', e); }
+}
+async function syncSession(c) {
+  const { data, error } = await c.auth.getSession();
+  if (error && !data?.session) return; // offline: keep showing the saved account rather than signing out
+  await setSession(data.session, false);
+}
+
+// in the sign-in sheet: pass the code back to the app until it confirms
+function relayCode(c, id, code) {
+  show('signin');
+  const say = (t) => ($('#signinStatus').textContent = t);
+  say('Finishing sign-in…');
+  let done = false;
+  const ch = c.channel('ptm-auth-' + id);
+  ch.on('broadcast', { event: 'got' }, ({ payload }) => {
+    done = true;
+    say(payload?.ok ? "✓ You're signed in! Close this window to jump back into Pass The Mic." : "Sign-in didn't finish. Open Pass The Mic and try again.");
+    setTimeout(() => { try { window.close(); } catch {} }, 800);
+  });
+  ch.subscribe((st) => {
+    if (st !== 'SUBSCRIBED') return;
+    const send = () => !done && ch.send({ type: 'broadcast', event: 'code', payload: { code } });
+    send();
+    const t = setInterval(() => (done ? clearInterval(t) : send()), 1500);
+    setTimeout(() => { clearInterval(t); if (!done) say("Couldn't reach the app. Open Pass The Mic and tap Sign in again."); }, 120000);
+  });
+}
+// in the app: wait for the sign-in sheet to send the code back
+const relays = new Set();
+function listenRelay(c, id) {
+  if (relays.has(id)) return;
+  relays.add(id);
+  let busy = false;
+  const ch = c.channel('ptm-auth-' + id);
+  ch.on('broadcast', { event: 'code' }, async ({ payload }) => {
+    if (busy) return;
+    busy = true;
+    const { error } = await c.auth.exchangeCodeForSession(payload.code);
+    ch.send({ type: 'broadcast', event: 'got', payload: { ok: !error } });
+    store.set('ptm-relay', null);
+    if (error) { $('#signinStatus').textContent = "Sign-in didn't finish. Try again."; busy = false; return; }
+    setTimeout(() => { c.removeChannel(ch); relays.delete(id); }, 3000);
+    if ($('#s-signin').classList.contains('active')) show('home');
+  });
+  ch.subscribe();
 }
 async function setSession(session, greet) {
   if (!session?.user) { ACCT = null; return renderAcct(); }
-  if (ACCT?.id === session.user.id) return renderAcct();
+  store.set('ptm-relay', null);
+  if (ACCT?.id === session.user.id && !ACCT.cached) return renderAcct();
   const c = await getSB();
-  let { data: profile } = await c.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+  let { data: profile, error } = await c.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+  if (error && ACCT?.id === session.user.id) return renderAcct(); // offline: keep the saved profile
   if (!profile) { // account made before the profiles table existed
     const meta = session.user.user_metadata || {};
     ({ data: profile } = await c.from('profiles').upsert({ id: session.user.id, display_name: (meta.full_name || meta.name || 'Singer').slice(0, 24), avatar_url: meta.avatar_url || null }).select().single());
@@ -1653,6 +1724,7 @@ function renderAcct() {
   $('#acctName').textContent = ACCT ? ACCT.profile.display_name.split(' ')[0] : 'Sign in';
   if ($('#s-players').classList.contains('active')) renderPlayers();
   $('#leadersSignin').classList.toggle('hidden', !!ACCT);
+  store.set('ptm-acct', ACCT ? JSON.stringify({ id: ACCT.id, profile: ACCT.profile }) : null);
 }
 $('#acctBtn').onclick = () => (ACCT ? openProfile() : show('signin'));
 $('#leadersBtn').onclick = () => openLeaders();
@@ -1665,15 +1737,26 @@ $('#addMe').onclick = () => {
 };
 
 $('#googleBtn').onclick = async () => {
-  $('#signinStatus').textContent = 'Opening Google…';
+  const say = (t) => ($('#signinStatus').textContent = t);
+  say('Opening Google…');
   try {
-    const on = await (await import('./net.js')).providers().catch(() => ({}));
-    if (!on.google) return ($('#signinStatus').textContent = "Google sign-in isn't switched on yet. Try again soon!");
+    if (googleOn === null) googleOn = !!(await (await import('./net.js')).providers().catch(() => ({}))).google;
+    if (!googleOn) return say("Google sign-in isn't switched on yet. Try again soon!");
     const c = await getSB();
-    const { error } = await c.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href.split('#')[0] } });
+    if (!STANDALONE) {
+      const { error } = await c.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.href.split('#')[0] } });
+      if (error) throw error;
+      return;
+    }
+    // installed app: if Google opens in a separate sheet, that sheet hands the code back (see relayCode)
+    const id = (crypto.randomUUID?.() || String(Math.random()).slice(2) + Date.now()).replace(/-/g, '');
+    const { data, error } = await c.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: `${location.origin}/?relay=${id}`, skipBrowserRedirect: true } });
     if (error) throw error;
+    store.set('ptm-relay', id);
+    listenRelay(c, id);
+    location.assign(data.url);
   } catch (e) {
-    $('#signinStatus').textContent = /provider is not enabled|Unsupported provider/i.test(e.message || '') ? "Google sign-in isn't switched on yet. Try again soon!" : "Couldn't open Google sign-in. Check your connection and try again.";
+    say(/provider is not enabled|Unsupported provider/i.test(e.message || '') ? "Google sign-in isn't switched on yet. Try again soon!" : "Couldn't open Google sign-in. Check your connection and try again.");
   }
 };
 

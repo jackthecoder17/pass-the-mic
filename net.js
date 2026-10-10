@@ -12,7 +12,7 @@ export async function sb() {
   if (!client) {
     const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm');
     client ??= createClient(SB_URL, SB_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, flowType: 'pkce' },
       realtime: { params: { eventsPerSecond: 20 } },
     });
   }

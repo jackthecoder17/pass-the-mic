@@ -1,7 +1,7 @@
 // Service worker: makes Pass The Mic installable and keeps the app shell available on flaky connections.
 // Same-origin files: network first (always fresh after a deploy), cached copy if the network fails.
-// Fonts: cache first. Music, lyrics, live rooms and /api are never cached.
-const CACHE = 'ptm-v13';
+// Fonts and the version-pinned Supabase library: cache first. Music, lyrics, live rooms and /api are never cached.
+const CACHE = 'ptm-v14';
 const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/match.js', '/resolve.js', '/net.js', '/reel.js', '/packs.json', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -13,8 +13,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request, url = new URL(req.url);
   if (req.method !== 'GET') return;
-  if (url.hostname === 'fonts.gstatic.com' || url.hostname === 'fonts.googleapis.com') {
-    e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); return res; })));
+  if (url.hostname === 'fonts.gstatic.com' || url.hostname === 'fonts.googleapis.com' || (url.hostname === 'cdn.jsdelivr.net' && url.pathname.startsWith('/npm/@supabase/'))) {
+    e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => { if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); } return res; })));
     return;
   }
   if (url.origin !== location.origin || url.pathname.startsWith('/api/')) return;
