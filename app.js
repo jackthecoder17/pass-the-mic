@@ -1,4 +1,4 @@
-import { tokenize, align } from './match.js';
+import { tokenize, align, score } from './match.js';
 import { resolveSong } from './resolve.js';
 
 const $ = (s) => document.querySelector(s);
@@ -14,7 +14,8 @@ const S = {
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
-const passMark = () => Math.min(75, 55 + (S.round - 1) * 5);
+const passMark = () => Math.min(80, 65 + (S.round - 1) * 5); // 65% → 80%: strict, but leaves room for speech-to-text slips
+const hintCount = () => (S.round <= 2 ? 1 : 0); // early rounds show the first word, so it doesn't count
 const alive = () => S.players.filter((p) => p.lives > 0 && !p.gone); // gone = dropped out of an online room (may come back)
 
 let toastT;
@@ -647,7 +648,7 @@ function startTurn() {
   $('#turnAv').innerHTML = avatar(p, 'xl');
   const cueLine = S.song.lines.slice(0, sec.i).reverse().find((l) => l.words.length);
   $('#cue').textContent = cueLine ? `“…${cueLine.text}”` : '';
-  const hint = S.round <= 2 ? 1 : 0; // early rounds: show the first word so you know where to come in
+  const hint = hintCount(); // early rounds: show the first word so you know where to come in
   $('#chips').innerHTML = sec.words.map((w, i) => `<span class="w${i < hint ? ' hint' : ''}" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
   $('#heard').textContent = '';
   setTimer(1);
@@ -709,15 +710,15 @@ function beginListening() {
   }, 50);
 }
 $('#doneBtn').onclick = () => finishTurn();
+// each "ear" is graded on its own; the better one wins (words are never mixed between engines)
 function bestOf(expected) {
-  let sims = expected.map(() => 0), text = '', top = -1;
+  let best = { sims: expected.map(() => 0), text: '', score: -1 };
   for (const t of Object.values(S.heardBy || {})) {
     if (!t) continue;
-    const r = align(expected, tokenize(t).map((w) => w.n));
-    sims = sims.map((v, i) => Math.max(v, r.sims[i] || 0));
-    if (r.score > top) { top = r.score; text = t; }
+    const r = score(expected, tokenize(t).map((w) => w.n), { hint: hintCount() });
+    if (r.score > best.score) best = { sims: r.sims, text: t, score: r.score };
   }
-  return { sims, text };
+  return best;
 }
 
 function paintChips(sel, sims, final) {
@@ -751,7 +752,7 @@ function finishTurn() {
 function scoreTurn() {
   if (S.phase !== 'scoring') return; // paused or quit meanwhile
   const sec = S.section;
-  const r = align(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n));
+  const r = score(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n), { hint: hintCount() });
   const pct = Math.round(r.score * 100);
   const noMic = S.turnCloud ? S.micBlocked || (S.cloudFailed && !S.heard) : !SR || S.micBlocked;
   if (S.net) {
@@ -762,7 +763,7 @@ function scoreTurn() {
     return;
   }
   const mark = passMark();
-  const verdict = noMic ? 'vote' : pct >= mark ? 'pass' : pct < mark - 15 ? 'fail' : 'vote';
+  const verdict = noMic ? 'vote' : pct >= mark ? 'pass' : pct < mark - 10 ? 'fail' : 'vote';
   S.result = { pct, verdict };
   showReveal({ pct, sims: r.sims, heard: S.heard, noMic, verdict }, () => {
     if (verdict === 'vote') $('#voteBox').classList.remove('hidden');
@@ -1361,7 +1362,7 @@ function hostJudge(res) {
   S.judged = true;
   clearTimeout(watchdogT);
   const mark = passMark();
-  const verdict = res.noMic ? 'vote' : res.pct >= mark ? 'pass' : res.pct < mark - 15 ? 'fail' : 'vote';
+  const verdict = res.noMic ? 'vote' : res.pct >= mark ? 'pass' : res.pct < mark - 10 ? 'fail' : 'vote';
   S.lastPct = res.pct;
   if (verdict !== 'vote') applyResult(verdict === 'pass', res.pct);
   const m = { pct: res.pct, sims: res.sims, heard: res.heard, noMic: res.noMic, verdict, pass: verdict === 'pass', players: S.players };
@@ -1424,20 +1425,12 @@ function startRec(expected, onText, { quiet = false, onFail = null } = {}) {
     let session = '';
     const r = new SR();
     rec = r;
-    r.lang = S.lang; r.continuous = true; r.interimResults = true; r.maxAlternatives = 4;
+    r.lang = S.lang; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
     r.onresult = (e) => {
       const parts = [];
       for (let i = 0; i < e.results.length; i++) {
         const res = e.results[i];
-        let best = res[0].transcript;
-        if (expected && res.length > 1) { // pick whichever alternative best fits the lyric
-          let bs = -1;
-          for (let a = 0; a < res.length; a++) {
-            const sc = align(expected, tokenize(`${prior} ${parts.join(' ')} ${res[a].transcript}`).map((w) => w.n)).score;
-            if (sc > bs) { bs = sc; best = res[a].transcript; }
-          }
-        }
-        parts.push(best);
+        parts.push(res[0].transcript); // its top guess only: picking the guess that fits the lyric best inflated scores
       }
       session = parts.join(' ');
       onText(`${prior} ${session}`.replace(/\s+/g, ' ').trim());
@@ -1492,14 +1485,15 @@ function sectionLang(sec) {
   const yo = YO_MARKS.test(raw.normalize('NFD')) || words.filter((w) => YO_WORDS.has(w)).length / Math.max(1, words.length) >= 0.35;
   return yo ? '' : 'en'; // '' lets Whisper detect Yoruba itself instead of forcing English spellings
 }
-function cloudPrompt(sec) {
-  const before = S.song.lines.slice(Math.max(0, sec.i - 4), sec.i).map((l) => l.text).filter(Boolean).join(' ');
+// Whisper gets a style hint only, never the song's lyrics or title: it knows famous songs and would
+// "complete" a mumbled line with the real words, handing out points nobody sang.
+function cloudPrompt() {
   const all = S.song.lines.map((l) => l.text).join(' ');
   const naija = PIDGIN.test(all) || YO_MARKS.test(all.normalize('NFD')) || /naija|afro|amapiano|throwback/i.test(S.pack || '');
-  return `${naija ? 'Afrobeats song sung in Nigerian Pidgin, Yoruba and English. ' : ''}${S.song.title} by ${S.song.artist}. ${before}`.slice(0, 600);
+  return naija ? 'Someone singing in Nigerian Pidgin, Yoruba and English, e.g. wetin, dey, abeg, sabi, wahala, oya, omo, gbogbo.' : 'Someone singing song lyrics.';
 }
-async function transcribe(blob, prompt, lang = 'en') {
-  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', 'x-prompt': encodeURIComponent(prompt || ''), 'x-lang': lang }, body: blob });
+async function transcribe(blob, prompt, lang = 'en', final = false) {
+  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', 'x-prompt': encodeURIComponent(prompt || ''), 'x-lang': lang, 'x-final': final ? '1' : '0' }, body: blob });
   if (!r.ok) throw new Error(`transcribe ${r.status}`);
   return (await r.json()).text || '';
 }
@@ -1507,7 +1501,7 @@ async function startCloudRec(prompt, onText, { partials = true, lang = 'en' } = 
   if (cRec) stopCloudRec(true);
   S.micBlocked = false; S.cloudFailed = false;
   let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }); }
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true, channelCount: 1 } }); }
   catch { S.micBlocked = true; toast('Microphone blocked. Allow mic access for this site in your browser settings, then reload.'); return; }
   const mime = recMime();
   const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
@@ -1529,7 +1523,7 @@ async function pump(st, final = false) {
   if (final && st.voiced < 400) { st.text = ''; st.ok++; return; } // silence: don't let Whisper imagine words
   st.inflight = true; st.sent = size;
   try {
-    const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt, st.lang);
+    const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt, st.lang, final);
     st.ok++;
     if (text || final) { st.text = text || st.text; if (cRec === st || final) st.onText(st.text); }
   } catch (e) { console.warn(e); }

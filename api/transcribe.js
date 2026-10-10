@@ -18,6 +18,10 @@ async function readBody(req) {
   return Buffer.concat(chunks);
 }
 
+// phrases Whisper famously invents on silence/noise (from its YouTube training data)
+const PHANTOM = /^(thank you( (so much|very much))?( for watching| for listening)?|thanks for watching|please subscribe.*|subscribe.*|bye( bye)?|you|okay|music|applause|silence|[♪♫\s.!]*)$/;
+const phantom = (s) => PHANTOM.test(s.toLowerCase().replace(/[^a-z♪♫ ]/g, ' ').replace(/\s+/g, ' ').trim());
+
 const extFor = (type) => (/mp4|m4a|aac/.test(type) ? 'm4a' : /ogg/.test(type) ? 'ogg' : /wav/.test(type) ? 'wav' : 'webm');
 
 export default async function handler(req, res) {
@@ -43,7 +47,8 @@ export default async function handler(req, res) {
 
     const form = new FormData();
     form.append('file', new Blob([audio], { type }), `turn.${extFor(type)}`);
-    form.append('model', 'whisper-large-v3-turbo');
+    // the final grade uses the full (more accurate) model; live updates use the fast one
+    form.append('model', req.headers['x-final'] === '1' ? 'whisper-large-v3' : 'whisper-large-v3-turbo');
     // English by default; Yoruba-heavy sections ask Whisper to detect the language itself
     const lang = String(req.headers['x-lang'] ?? 'en');
     if (['en', 'yo'].includes(lang)) form.append('language', lang);
@@ -58,7 +63,7 @@ export default async function handler(req, res) {
     // actually confident about: real singing scores around -0.4 avg log-prob, made-up text around -1.9.
     const segs = Array.isArray(j.segments) ? j.segments : null;
     const text = segs
-      ? segs.filter((g) => g.avg_logprob > -1.0 && g.no_speech_prob < 0.6 && (g.compression_ratio ?? 1) < 2.4).map((g) => g.text).join(' ')
+      ? segs.filter((g) => g.avg_logprob > -1.0 && g.no_speech_prob < 0.6 && (g.compression_ratio ?? 1) < 2.4 && !phantom(g.text)).map((g) => g.text).join(' ')
       : j.text;
     send(200, { text: String(text || '').replace(/\s+/g, ' ').trim() });
   } catch (e) {

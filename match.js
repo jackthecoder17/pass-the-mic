@@ -1,5 +1,6 @@
-// Lenient lyric matching: speech-to-text on singing is noisy, so we score how
-// close the singer got rather than demanding an exact transcript.
+// Lyric matching: strict about *which* words were sung, forgiving about how speech-to-text spelled them.
+// A word only counts if it was really there: an exact match, a near-identical spelling ("bo" for "bow",
+// "brekfast"), a known Pidgin sound-alike ("dey"/"they", "na"/"now") or the same long word spelled differently.
 
 const MAP = {
   cause: 'because', cos: 'because', coz: 'because', cuz: 'because', bc: 'because',
@@ -9,10 +10,11 @@ const MAP = {
   till: 'til', until: 'til', tho: 'though', thru: 'through', lil: 'little', ok: 'okay',
   da: 'the', dem: 'them', dat: 'that', dis: 'this', wetin: 'what', abeg: 'abeg',
   // Pidgin spellings and how speech-to-text usually writes them
-  sey: 'say', wan: 'want', una: 'you', yan: 'yarn', pikin: 'picking', shey: 'shay', sef: 'self', sha: 'shah', oya: 'oyah', no: 'no',
+  sey: 'say', wan: 'want', una: 'you', yan: 'yarn', pikin: 'picking', shey: 'shay', sef: 'self', oya: 'oyah', no: 'no',
 };
 const NUM = { 0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten' };
-const STOP = new Set(['a', 'an', 'the', 'to', 'and', 'i', 'you', 'oh', 'yeah', 'na', 'of', 'in', 'on', 'my', 'me', 'it', 'is', 'be', 'for', 'so', 'we', 'eh', 'ah', 'uh', 'hey', 'whoa', 'la', 'no']);
+// only true filler sounds count half; every real word counts fully
+const STOP = new Set(['oh', 'yeah', 'eh', 'ah', 'uh', 'hey', 'whoa', 'la', 'ooh', 'mm', 'mmm', 'hmm', 'ay', 'ayy', 'ehn']);
 
 export function normWord(raw) {
   let w = raw.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -62,39 +64,41 @@ function lev(a, b) {
 
 const strict = (a, b) => 1 - lev(a, b) / Math.max(a.length, b.length);
 
+// how speech-to-text commonly writes Pidgin/Naija words that it doesn't know
+const EQUIV = new Set(['dey|they', 'dey|day', 'dey|the', 'na|now', 'na|nah', 'wey|way', 'wey|where', 'say|said', 'you|your', 'go|gon', 'oh|o', 'una|unna', 'abi|abby', 'ehn|eh', 'sabi|savvy', 'sabi|sabe', 'oyah|oya', 'comot|come']);
+const equiv = (a, b) => EQUIV.has(`${a}|${b}`) || EQUIV.has(`${b}|${a}`);
+
 const cache = new Map();
+// similarity of one lyric word to one heard word: 1 = same, ~0.8 = same word spelled differently, 0 = different word
 export function sim(a, b) {
   if (a === b) return 1;
   const key = a + '|' + b;
   if (cache.has(key)) return cache.get(key);
   let s = 0;
-  const r = 1 - lev(a, b) / Math.max(a.length, b.length);
-  if (r >= 0.75) s = r;
-  const pa = phon(a), pb = phon(b);
-  if (pa && pa === pb) s = Math.max(s, a.length <= 2 || b.length <= 2 ? 0.75 : 0.9);
-  else if (pa.length >= 2 && pb.length >= 2 && Math.max(pa.length, pb.length) >= 3 && 1 - lev(pa, pb) / Math.max(pa.length, pb.length) >= 0.66) s = Math.max(s, 0.7);
+  const d = lev(a, b), L = Math.max(a.length, b.length), r = 1 - d / L;
+  if (equiv(a, b)) s = 0.9;
+  else if (L <= 3) s = d <= 1 && a[0] === b[0] && Math.min(a.length, b.length) >= 2 ? 0.8 : 0; // bo/bow, oh/ho stays out
+  else if (r >= 0.8) s = r;                                                      // brekfast, defualt
+  else if (Math.min(a.length, b.length) >= 4 && r >= 0.6 && phon(a) === phon(b)) s = 0.8; // shayo/shyo, igbo/egbo
   if (cache.size > 20000) cache.clear();
   cache.set(key, s);
   return s;
 }
 
-// how alike two run-together chunks sound ("omotodara" vs "omo to dara"), strict so random words can't sneak in
+// run-together words ("omotodara" for "omo to dara", "every body" for "everybody"): spelling must be near-identical
 function groupSim(a, b) {
   const r = strict(a, b);
-  if (r >= 0.7) return r;
-  const pa = phon(a), pb = phon(b);
-  if (pa.length >= 3 && pa === pb) return 0.8;
-  if (Math.min(pa.length, pb.length) >= 4 && 1 - lev(pa, pb) / Math.max(pa.length, pb.length) >= 0.75) return 0.7;
+  if (r >= 0.8) return r;
+  if (Math.min(a.length, b.length) >= 6 && r >= 0.7 && phon(a) === phon(b)) return 0.75;
   return 0;
 }
 
 // Order-aware weighted alignment of expected vs heard tokens (filler words count half).
-// Besides word-for-word matches, up to 4 expected (3 heard) words may be merged: speech-to-text often runs
-// Yoruba/Pidgin words together ("Omotodara" for "omo to dara") or splits them ("every body").
+// Up to 4 lyric words may be merged into up to 3 heard words (and vice versa) when spelled near-identically.
 // -> { score 0..1, sims: per-expected-word similarity (0 = missed) }
-export function align(exp, heard) {
+export function align(exp, heard, weights) {
   const n = exp.length, m = heard.length;
-  const W = exp.map((w) => (STOP.has(w) ? 0.5 : 1));
+  const W = weights || exp.map((w) => (STOP.has(w) ? 0.5 : 1));
   const total = W.reduce((a, b) => a + b, 0) || 1;
   const dp = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
   const mv = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(null));
@@ -105,14 +109,13 @@ export function align(exp, heard) {
       if (j > 0 && dp[i][j - 1] > best) { best = dp[i][j - 1]; move = [0, 1, 0]; }
       for (let k = 1; k <= 4 && k <= i; k++) {
         for (let q = 1; q <= 3 && q <= j; q++) {
-          let s;
-          if (k === 1 && q === 1) s = sim(exp[i - 1], heard[j - 1]);
-          else s = groupSim(exp.slice(i - k, i).join(''), heard.slice(j - q, j).join(''));
+          if (k === q && k > 1) continue; // only real merges/splits; never let a pair hide a wrong word
+          const s = k === 1 && q === 1 ? sim(exp[i - 1], heard[j - 1]) : groupSim(exp.slice(i - k, i).join(''), heard.slice(j - q, j).join(''));
           if (!s) continue;
           let w = 0;
           for (let t = i - k; t < i; t++) w += W[t];
           const v = dp[i - k][j - q] + w * s;
-          if (v > best) { best = v; move = [k, q, s]; }
+          if (v > best + 1e-9) { best = v; move = [k, q, s]; }
         }
       }
       dp[i][j] = best; mv[i][j] = move;
@@ -126,7 +129,16 @@ export function align(exp, heard) {
     const [k, q, s] = mvv;
     if (s) for (let t = i - k; t < i; t++) sims[t] = s;
     i -= k; j -= q;
-    if (k === 0 && q === 0) break;
   }
   return { score: dp[n][m] / total, sims };
+}
+
+// The grade for a turn. `hint` = how many leading words were shown on screen (they don't count).
+// Singing a stream of extra words to fish for matches is penalised.
+export function score(exp, heard, { hint = 0 } = {}) {
+  const W = exp.map((w, i) => (i < hint ? 0 : STOP.has(w) ? 0.5 : 1));
+  const r = align(exp, heard, W);
+  const room = exp.length * 1.6 + 3;
+  if (heard.length > room) r.score *= room / heard.length;
+  return r;
 }
