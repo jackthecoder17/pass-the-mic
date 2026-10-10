@@ -44,7 +44,9 @@ export default async function handler(req, res) {
     const form = new FormData();
     form.append('file', new Blob([audio], { type }), `turn.${extFor(type)}`);
     form.append('model', 'whisper-large-v3-turbo');
-    form.append('language', 'en');
+    // English by default; Yoruba-heavy sections ask Whisper to detect the language itself
+    const lang = String(req.headers['x-lang'] ?? 'en');
+    if (['en', 'yo'].includes(lang)) form.append('language', lang);
     form.append('temperature', '0');
     form.append('response_format', 'verbose_json');
     if (prompt) form.append('prompt', prompt);

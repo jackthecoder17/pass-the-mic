@@ -8,6 +8,8 @@ const MAP = {
   o: 'oh', oo: 'oh', ooh: 'oh', ohh: 'oh', ohhh: 'oh', oooh: 'oh', woah: 'whoa', wo: 'whoa',
   till: 'til', until: 'til', tho: 'though', thru: 'through', lil: 'little', ok: 'okay',
   da: 'the', dem: 'them', dat: 'that', dis: 'this', wetin: 'what', abeg: 'abeg',
+  // Pidgin spellings and how speech-to-text usually writes them
+  sey: 'say', wan: 'want', una: 'you', yan: 'yarn', pikin: 'picking', shey: 'shay', sef: 'self', sha: 'shah', oya: 'oyah', no: 'no',
 };
 const NUM = { 0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten' };
 const STOP = new Set(['a', 'an', 'the', 'to', 'and', 'i', 'you', 'oh', 'yeah', 'na', 'of', 'in', 'on', 'my', 'me', 'it', 'is', 'be', 'for', 'so', 'we', 'eh', 'ah', 'uh', 'hey', 'whoa', 'la', 'no']);
@@ -76,45 +78,55 @@ export function sim(a, b) {
   return s;
 }
 
+// how alike two run-together chunks sound ("omotodara" vs "omo to dara"), strict so random words can't sneak in
+function groupSim(a, b) {
+  const r = strict(a, b);
+  if (r >= 0.7) return r;
+  const pa = phon(a), pb = phon(b);
+  if (pa.length >= 3 && pa === pb) return 0.8;
+  if (Math.min(pa.length, pb.length) >= 4 && 1 - lev(pa, pb) / Math.max(pa.length, pb.length) >= 0.75) return 0.7;
+  return 0;
+}
+
 // Order-aware weighted alignment of expected vs heard tokens (filler words count half).
+// Besides word-for-word matches, up to 4 expected (3 heard) words may be merged: speech-to-text often runs
+// Yoruba/Pidgin words together ("Omotodara" for "omo to dara") or splits them ("every body").
 // -> { score 0..1, sims: per-expected-word similarity (0 = missed) }
 export function align(exp, heard) {
   const n = exp.length, m = heard.length;
   const W = exp.map((w) => (STOP.has(w) ? 0.5 : 1));
   const total = W.reduce((a, b) => a + b, 0) || 1;
   const dp = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
-  const mv = Array.from({ length: n + 1 }, () => new Int8Array(m + 1));
-  const sv = Array.from({ length: n + 1 }, () => new Float64Array(m + 1));
-  for (let j = 1; j <= m; j++) mv[0][j] = 2;
+  const mv = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(null));
+  for (let j = 1; j <= m; j++) mv[0][j] = [0, 1, 0];
   for (let i = 1; i <= n; i++) {
     for (let j = 0; j <= m; j++) {
-      let best = dp[i - 1][j], move = 1, bs = 0;
-      if (j > 0 && dp[i][j - 1] > best) { best = dp[i][j - 1]; move = 2; }
-      if (j > 0) {
-        const s = sim(exp[i - 1], heard[j - 1]);
-        if (s > 0 && dp[i - 1][j - 1] + W[i - 1] * s > best) { best = dp[i - 1][j - 1] + W[i - 1] * s; move = 3; bs = s; }
+      let best = dp[i - 1][j], move = [1, 0, 0];
+      if (j > 0 && dp[i][j - 1] > best) { best = dp[i][j - 1]; move = [0, 1, 0]; }
+      for (let k = 1; k <= 4 && k <= i; k++) {
+        for (let q = 1; q <= 3 && q <= j; q++) {
+          let s;
+          if (k === 1 && q === 1) s = sim(exp[i - 1], heard[j - 1]);
+          else s = groupSim(exp.slice(i - k, i).join(''), heard.slice(j - q, j).join(''));
+          if (!s) continue;
+          let w = 0;
+          for (let t = i - k; t < i; t++) w += W[t];
+          const v = dp[i - k][j - q] + w * s;
+          if (v > best) { best = v; move = [k, q, s]; }
+        }
       }
-      if (j > 1) { // "every body" heard for "everybody"
-        const s = strict(exp[i - 1], heard[j - 2] + heard[j - 1]);
-        if (s >= 0.85 && dp[i - 1][j - 2] + W[i - 1] * s > best) { best = dp[i - 1][j - 2] + W[i - 1] * s; move = 4; bs = s; }
-      }
-      if (i > 1 && j > 0) { // "everybody" heard for "every body"
-        const s = strict(exp[i - 2] + exp[i - 1], heard[j - 1]);
-        if (s >= 0.85 && dp[i - 2][j - 1] + (W[i - 2] + W[i - 1]) * s > best) { best = dp[i - 2][j - 1] + (W[i - 2] + W[i - 1]) * s; move = 5; bs = s; }
-      }
-      dp[i][j] = best; mv[i][j] = move; sv[i][j] = bs;
+      dp[i][j] = best; mv[i][j] = move;
     }
   }
   const sims = new Array(n).fill(0);
   let i = n, j = m;
   while (i > 0 || j > 0) {
-    const move = mv[i][j];
-    if (move === 1) i--;
-    else if (move === 2) j--;
-    else if (move === 3) { sims[i - 1] = sv[i][j]; i--; j--; }
-    else if (move === 4) { sims[i - 1] = sv[i][j]; i--; j -= 2; }
-    else if (move === 5) { sims[i - 1] = sims[i - 2] = sv[i][j]; i -= 2; j--; }
-    else break;
+    const mvv = mv[i][j];
+    if (!mvv) break;
+    const [k, q, s] = mvv;
+    if (s) for (let t = i - k; t < i; t++) sims[t] = s;
+    i -= k; j -= q;
+    if (k === 0 && q === 0) break;
   }
   return { score: dp[n][m] / total, sims };
 }

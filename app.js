@@ -37,8 +37,23 @@ function show(id) {
   // keep one history entry above the app so the phone's back button opens our menu instead of leaving
   if (id !== 'home' && history.state?.ptm !== 'guard') history.pushState({ ptm: 'guard' }, '');
   scrollTo(0, 0);
-  requestAnimationFrame(placeTV);
+  requestAnimationFrame(() => { placeTV(); fitBig(); });
 }
+// big poster names: shrink the font until the longest word fits instead of breaking it mid-word
+function fitText(el, max = 88, min = 28) {
+  if (!el || !el.offsetParent) return;
+  let size = Math.min(max, el.clientWidth / 3);
+  el.style.fontSize = `${size}px`;
+  while (size > min && el.scrollWidth > el.clientWidth + 1) { size -= 3; el.style.fontSize = `${size}px`; }
+}
+const fitBig = () => document.querySelectorAll('.screen.active .who, .screen.active .go').forEach((el) => fitText(el, el.classList.contains('go') ? 76 : 88));
+addEventListener('resize', fitBig);
+// refit whenever these headlines change text (countdown numbers, SING!, winner names…)
+for (const sel of ['#handName', '#endTitle', '#goTxt']) {
+  const el = document.querySelector(sel);
+  new MutationObserver(() => fitText(el, sel === '#goTxt' ? 76 : 88)).observe(el, { childList: true, characterData: true, subtree: true });
+}
+
 // keep the screen on during a game (phones lock while you're listening or passing the phone around)
 let wakeLock = null, wantAwake = false;
 async function keepAwake(on) {
@@ -129,7 +144,7 @@ const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
 
 // ---------- players ----------
 function renderPlayers() {
-  $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}${esc(p.name)}<button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('') +
+  $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}<span class="nm">${esc(p.name)}</span><button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('') +
     (S.players.length < 12 ? `<li class="empty"><span class="av lg">＋</span><span class="tag">${S.players.length ? 'add another' : 'add players above'}</span></li>` : '');
   const canAddMe = ACCT && !S.players.some((p) => p.uid === ACCT.id);
   $('#addMe').classList.toggle('hidden', !canAddMe);
@@ -307,8 +322,8 @@ function renderResults() {
     return `<li class="res">
       ${x.art ? `<img src="${esc(x.art)}" alt="" loading="lazy">` : '<span class="noart">🎵</span>'}
       <div class="ri"><b>${esc(x.t)}</b><span>${esc(x.a)}${x.album && x.album !== x.t ? ' · ' + esc(x.album) : ''} · ${fmt(x.secs)}</span></div>
-      <button class="chip" type="button" data-play="${i}">▶ Play</button>
-      <button class="chip add ${added ? 'on' : ''}" type="button" data-add="${i}" ${added ? 'disabled' : ''}>${added ? '✓ Added' : '+ Add'}</button>
+      <button class="chip" type="button" data-play="${i}" aria-label="Play ${esc(x.t)}">▶<span class="lbl"> Play</span></button>
+      <button class="chip add ${added ? 'on' : ''}" type="button" data-add="${i}" ${added ? 'disabled' : ''} aria-label="Add ${esc(x.t)} to playlist">${added ? '✓<span class="lbl"> Added</span>' : '+<span class="lbl"> Add</span>'}</button>
     </li>`;
   }).join('');
 }
@@ -661,21 +676,29 @@ function beginListening() {
   const sec = S.section;
   const expected = sec.words.map((w) => w.n);
   const dur = singWindow(sec);
-  S.heard = '';
+  S.heard = ''; S.heardBy = {};
   let allIn = false;
-  const onText = (text) => {
+  // two "ears" can report: the phone's own recognizer (instant) and Whisper (more accurate).
+  // A word counts if either heard it; the transcript shown is whichever matched more.
+  const onText = (src) => (text) => {
     if (S.phase !== 'turn') return;
-    S.heard = text;
-    const sims = align(expected, tokenize(text).map((w) => w.n)).sims;
+    S.heardBy[src] = text;
+    const { sims, text: best } = bestOf(expected);
+    S.heard = best;
     paintChips('#chips', sims, false);
-    $('#heard').textContent = text ? `👂 “${text}”` : '';
+    $('#heard').textContent = best ? `👂 “${best}”` : '';
     kickWave(0.7);
-    if (S.net) sendLive(sims, text);
+    if (S.net) sendLive(sims, best);
     // every word caught: wrap up on our own instead of waiting out the clock
     if (!allIn && sims.length && sims.every((x) => x > 0)) { allIn = true; setTimeout(finishTurn, 1400); }
   };
   S.turnCloud = S.cloud && !!window.MediaRecorder;
-  if (S.turnCloud) startCloudRec(cloudPrompt(sec), onText); else startRec(expected, onText);
+  if (S.turnCloud) {
+    // instant words from the phone's recognizer where it can share the mic; Whisper live updates otherwise
+    const live = !!SR && !IS_IOS;
+    startCloudRec(cloudPrompt(sec), onText('cloud'), { partials: !live, lang: sectionLang(sec) });
+    if (live) startRec(expected, onText('sr'), { quiet: true, onFail: () => { if (cRec) cRec.partials = true; } });
+  } else startRec(expected, onText('sr'));
   $('#doneBtn').disabled = false;
   const t0 = performance.now();
   clearInterval(turnTimer);
@@ -686,6 +709,16 @@ function beginListening() {
   }, 50);
 }
 $('#doneBtn').onclick = () => finishTurn();
+function bestOf(expected) {
+  let sims = expected.map(() => 0), text = '', top = -1;
+  for (const t of Object.values(S.heardBy || {})) {
+    if (!t) continue;
+    const r = align(expected, tokenize(t).map((w) => w.n));
+    sims = sims.map((v, i) => Math.max(v, r.sims[i] || 0));
+    if (r.score > top) { top = r.score; text = t; }
+  }
+  return { sims, text };
+}
 
 function paintChips(sel, sims, final) {
   document.querySelectorAll(sel + ' .w').forEach((el, i) => {
@@ -703,7 +736,12 @@ function finishTurn() {
   $('#doneBtn').disabled = true;
   $('#goTxt').className = 'go'; $('#goTxt').textContent = 'SCORING…';
   if (S.turnCloud) {
-    stopCloudRec().then((text) => { if (text) S.heard = text; scoreTurn(); });
+    recOn = false; try { rec?.stop(); } catch {} // the live recognizer (if any)
+    stopCloudRec().then((text) => {
+      if (text) S.heardBy.cloud = text;
+      S.heard = bestOf(S.section.words.map((w) => w.n)).text || S.heard;
+      scoreTurn();
+    });
   } else {
     stopRec();
     setTimeout(scoreTurn, 800); // let the recognizer flush its final words
@@ -875,7 +913,7 @@ function renderStandings(gain) {
   const list = [...S.players].filter((p) => !p.gone || p === cur).sort((a, b) => b.points - a.points || b.lives - a.lives).slice(0, 4);
   if (!list.includes(cur)) list[list.length - 1] = cur;
   $('#standings').innerHTML = list.map((p) =>
-    `<div class="st ${p === cur ? 'me' : ''} ${p.lives <= 0 ? 'out' : ''}">${avatar(p, 'sm')}<span class="nm">${esc(p.name)} ${p === cur && gain ? `<span class="delta">+${gain}</span>` : ''}</span><span class="hearts">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span><span class="pts">${p.points}</span></div>`).join('');
+    `<div class="st ${p === cur ? 'me' : ''} ${p.lives <= 0 ? 'out' : ''}">${avatar(p, 'sm')}<span class="nm">${esc(p.name)}</span>${p === cur && gain ? `<span class="delta">+${gain}</span>` : ''}<span class="hearts">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span><span class="pts">${p.points}</span></div>`).join('');
 }
 
 // ---------- endings ----------
@@ -1100,7 +1138,7 @@ function renderLobby(members) {
   if (!S.net) return;
   const host = members.find((m) => m.host);
   $('#lobbyCount').textContent = `Who's in · ${members.length}`;
-  $('#lobbyList').innerHTML = members.map((m, i) => `<li>${avatar(dress({ photo: m.photo, c: m.c, f: m.f, name: m.name }, i), 'lg', m.ready ? 'ready' : '')}${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}<span class="tag ${m.host ? '' : m.ready ? 'ok' : ''}">${m.host ? '👑 host' : m.ready ? 'ready' : 'getting ready…'}</span></li>`).join('') +
+  $('#lobbyList').innerHTML = members.map((m, i) => `<li>${avatar(dress({ photo: m.photo, c: m.c, f: m.f, name: m.name }, i), 'lg', m.ready ? 'ready' : '')}<span class="nm">${esc(m.name)}</span>${m.id === ME.id ? '<span class="tag">(you)</span>' : ''}<span class="tag ${m.host ? '' : m.ready ? 'ok' : ''}">${m.host ? '👑 host' : m.ready ? 'ready' : 'getting ready…'}</span></li>`).join('') +
     '<li class="empty"><span class="av lg">＋</span><span class="tag">invite</span></li>';
   const ready = members.filter((m) => m.ready).length;
   if (S.net.host) $('#lobbyStatus').textContent = members.length < 2 ? 'Share the code. Your friends join from their own phones.' : `${ready}/${members.length} ready`;
@@ -1375,11 +1413,11 @@ function handleDecided(m) {
 
 // ---------- speech recognition ----------
 let rec = null, recOn = false;
-function startRec(expected, onText) {
+function startRec(expected, onText, { quiet = false, onFail = null } = {}) {
   if (!SR) return;
-  stopRec();
+  recOn = false; try { rec?.stop(); } catch {}
   recOn = true;
-  S.micBlocked = false;
+  if (!quiet) S.micBlocked = false;
   let prior = '';
   const begin = () => {
     if (!recOn) return;
@@ -1412,7 +1450,10 @@ function startRec(expected, onText) {
         'network': "This browser can't reach its speech service (common in Brave/Arc). Use Google Chrome or Safari.",
         'language-not-supported': 'That accent setting is not supported here. Try the US accent.',
       }[e.error];
-      if (why) { recOn = false; S.micBlocked = true; toast(why); }
+      if (!why) return;
+      recOn = false;
+      if (quiet) return onFail?.(); // helper only: Whisper keeps listening
+      S.micBlocked = true; toast(why);
     };
     r.onend = () => {
       prior = `${prior} ${session}`.trim();
@@ -1441,16 +1482,28 @@ fetch('/api/transcribe?ping=1').then((r) => (r.ok ? r.json() : null)).then((j) =
 let cRec = null;
 const recMime = () => ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'].find((m) => window.MediaRecorder?.isTypeSupported?.(m)) || '';
 // Whisper's prompt = what was sung just before, so it hears the song's words and spelling without being told the answer
+const IS_IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const YO_MARKS = /[ẹọṣẸỌṢ]|[aeiou][\u0300\u0301]/i;
+const YO_WORDS = new Set(['mo', 'mi', 'ni', 'ti', 'si', 'ko', 'ba', 'fun', 'wa', 're', 'won', 'ati', 'oluwa', 'olorun', 'emi', 'iwo', 'omo', 'owo', 'ife', 'gbogbo', 'sha', 'lo', 'se', 'temi', 'tiwa', 'jare', 'nkan', 'dada', 'soro', 'wo', 'fe', 'gba', 'yen', 'yi', 'eyin', 'awa', 'eleyi', 'ojo', 'ile', 'aye', 'orun', 'ori', 'oju', 'wahala', 'kilode', 'bawo', 'omoge', 'shey', 'sebi', 'abeg', 'jowo', 'ehn', 'ehen']);
+const PIDGIN = /\b(dey|una|wetin|abeg|sabi|wahala|oya|wey|sey|comot|chop|shayo|gbese|ehn|na wa|o!|pikin|kpanla|gbedu)\b/i;
+function sectionLang(sec) {
+  const raw = S.song.lines.slice(sec.i, sec.j).map((l) => l.text).join(' ');
+  const words = sec.words.map((w) => w.n);
+  const yo = YO_MARKS.test(raw.normalize('NFD')) || words.filter((w) => YO_WORDS.has(w)).length / Math.max(1, words.length) >= 0.35;
+  return yo ? '' : 'en'; // '' lets Whisper detect Yoruba itself instead of forcing English spellings
+}
 function cloudPrompt(sec) {
   const before = S.song.lines.slice(Math.max(0, sec.i - 4), sec.i).map((l) => l.text).filter(Boolean).join(' ');
-  return `${S.song.title} by ${S.song.artist}. ${before}`.slice(0, 500);
+  const all = S.song.lines.map((l) => l.text).join(' ');
+  const naija = PIDGIN.test(all) || YO_MARKS.test(all.normalize('NFD')) || /naija|afro|amapiano|throwback/i.test(S.pack || '');
+  return `${naija ? 'Afrobeats song sung in Nigerian Pidgin, Yoruba and English. ' : ''}${S.song.title} by ${S.song.artist}. ${before}`.slice(0, 600);
 }
-async function transcribe(blob, prompt) {
-  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', 'x-prompt': encodeURIComponent(prompt || '') }, body: blob });
+async function transcribe(blob, prompt, lang = 'en') {
+  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', 'x-prompt': encodeURIComponent(prompt || ''), 'x-lang': lang }, body: blob });
   if (!r.ok) throw new Error(`transcribe ${r.status}`);
   return (await r.json()).text || '';
 }
-async function startCloudRec(prompt, onText) {
+async function startCloudRec(prompt, onText, { partials = true, lang = 'en' } = {}) {
   if (cRec) stopCloudRec(true);
   S.micBlocked = false; S.cloudFailed = false;
   let stream;
@@ -1458,12 +1511,12 @@ async function startCloudRec(prompt, onText) {
   catch { S.micBlocked = true; toast('Microphone blocked. Allow mic access for this site in your browser settings, then reload.'); return; }
   const mime = recMime();
   const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  const st = { stream, mr, chunks: [], mime: mr.mimeType || mime || 'audio/webm', inflight: false, sent: 0, text: '', ok: 0, onText, prompt };
+  const st = { stream, mr, chunks: [], mime: mr.mimeType || mime || 'audio/webm', inflight: false, sent: 0, text: '', ok: 0, onText, prompt, partials, lang };
   cRec = st;
   try { unlockAudio(); st.src = ac.createMediaStreamSource(stream); st.an = ac.createAnalyser(); st.an.fftSize = 512; st.src.connect(st.an); } catch {}
   mr.ondataavailable = (e) => { if (e.data.size) st.chunks.push(e.data); };
   mr.start(400);
-  st.timer = setInterval(() => pump(st), 2500);
+  st.timer = setInterval(() => { if (st.partials) pump(st); }, 1500);
   // voice activity: count how long the mic actually hears something (silence never reaches Whisper)
   st.voiced = 0;
   st.vad = setInterval(() => { const l = levelOf(st); if (l === null || l > 0.025) st.voiced += 100; }, 100);
@@ -1471,12 +1524,12 @@ async function startCloudRec(prompt, onText) {
 async function pump(st, final = false) {
   if (st.inflight && !final) return;
   const size = st.chunks.reduce((n, c) => n + c.size, 0);
-  if (!final && size - st.sent < 8000) return; // nothing new worth sending yet
+  if (!final && size - st.sent < 5000) return; // nothing new worth sending yet
   if (!final && st.voiced < 300) return; // nobody has sung anything yet
   if (final && st.voiced < 400) { st.text = ''; st.ok++; return; } // silence: don't let Whisper imagine words
   st.inflight = true; st.sent = size;
   try {
-    const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt);
+    const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt, st.lang);
     st.ok++;
     if (text || final) { st.text = text || st.text; if (cRec === st || final) st.onText(st.text); }
   } catch (e) { console.warn(e); }
