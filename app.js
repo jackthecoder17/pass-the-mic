@@ -584,9 +584,9 @@ function theCut() {
   setTimeout(() => { document.body.classList.remove('cutting'); if (S.phase === 'cut') startTurn(); }, 850);
 }
 
-// timing: a 5-second count-in, then roughly twice the line's length (min 10s) to sing it
-const COUNT_IN = 5;
-const singWindow = (sec) => Math.max(10, (sec.end - sec.start) * 2 + 5);
+// timing: a 5-second count-in, then 15 seconds to sing (only stretched if the section itself runs longer)
+const COUNT_IN = 5, SING_SECS = 15;
+const singWindow = (sec) => Math.max(SING_SECS, (sec.end - sec.start) + 3);
 
 // ring timer around the singer's avatar (f: 1 = full, 0 = empty)
 const setTimer = (f) => { $('#timerBar').style.strokeDashoffset = String(390 * (1 - Math.max(0, Math.min(1, f)))); };
