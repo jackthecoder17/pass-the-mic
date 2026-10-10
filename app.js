@@ -1445,11 +1445,16 @@ async function startCloudRec(prompt, onText) {
   mr.ondataavailable = (e) => { if (e.data.size) st.chunks.push(e.data); };
   mr.start(400);
   st.timer = setInterval(() => pump(st), 2500);
+  // voice activity: count how long the mic actually hears something (silence never reaches Whisper)
+  st.voiced = 0;
+  st.vad = setInterval(() => { const l = levelOf(st); if (l === null || l > 0.025) st.voiced += 100; }, 100);
 }
 async function pump(st, final = false) {
   if (st.inflight && !final) return;
   const size = st.chunks.reduce((n, c) => n + c.size, 0);
   if (!final && size - st.sent < 8000) return; // nothing new worth sending yet
+  if (!final && st.voiced < 300) return; // nobody has sung anything yet
+  if (final && st.voiced < 400) { st.text = ''; st.ok++; return; } // silence: don't let Whisper imagine words
   st.inflight = true; st.sent = size;
   try {
     const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt);
@@ -1462,7 +1467,7 @@ async function pump(st, final = false) {
 function stopCloudRec(abort = false) {
   const st = cRec;
   if (!st) return Promise.resolve('');
-  cRec = null; clearInterval(st.timer);
+  cRec = null; clearInterval(st.timer); clearInterval(st.vad);
   return new Promise((resolve) => {
     const finish = async () => {
       st.stream.getTracks().forEach((t) => t.stop());
@@ -1476,9 +1481,10 @@ function stopCloudRec(abort = false) {
     if (st.mr.state !== 'inactive') { st.mr.onstop = finish; st.mr.stop(); } else finish();
   });
 }
-function micLevel() {
-  const an = cRec?.an;
-  if (!an) return null;
+function micLevel() { return cRec ? levelOf(cRec) : null; }
+function levelOf(st) {
+  const an = st?.an;
+  if (!an) return null; // no analyser (audio context blocked): don't gate on volume
   const d = new Uint8Array(an.fftSize);
   an.getByteTimeDomainData(d);
   let sum = 0;

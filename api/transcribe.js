@@ -46,13 +46,19 @@ export default async function handler(req, res) {
     form.append('model', 'whisper-large-v3-turbo');
     form.append('language', 'en');
     form.append('temperature', '0');
-    form.append('response_format', 'json');
+    form.append('response_format', 'verbose_json');
     if (prompt) form.append('prompt', prompt);
 
     const r = await fetch(ENDPOINT, { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: form });
     if (!r.ok) return send(r.status === 429 ? 429 : 502, { error: `transcriber ${r.status}` });
     const j = await r.json();
-    send(200, { text: String(j.text || '').trim() });
+    // Whisper invents words on silence/noise ("Thank you.", "I'm a little bit more."). Keep only segments it's
+    // actually confident about: real singing scores around -0.4 avg log-prob, made-up text around -1.9.
+    const segs = Array.isArray(j.segments) ? j.segments : null;
+    const text = segs
+      ? segs.filter((g) => g.avg_logprob > -1.0 && g.no_speech_prob < 0.6 && (g.compression_ratio ?? 1) < 2.4).map((g) => g.text).join(' ')
+      : j.text;
+    send(200, { text: String(text || '').replace(/\s+/g, ' ').trim() });
   } catch (e) {
     send(e.status || 500, { error: String(e.message || e) });
   }

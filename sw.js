@@ -1,7 +1,7 @@
 // Service worker: makes Pass The Mic installable and keeps the app shell available on flaky connections.
 // Same-origin files: network first (always fresh after a deploy), cached copy if the network fails.
 // Fonts: cache first. Music, lyrics, live rooms and /api are never cached.
-const CACHE = 'ptm-v4';
+const CACHE = 'ptm-v5';
 const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/match.js', '/resolve.js', '/net.js', '/packs.json', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
