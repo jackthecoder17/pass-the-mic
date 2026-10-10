@@ -129,6 +129,7 @@ h3 { font-family: var(--display); font-weight: 700; font-size: 17px; margin-top:
 .who { font-family: var(--display); font-weight: 900; font-size: clamp(44px, 14vw, 80px); line-height: 1; letter-spacing: -.03em; word-break: break-word; background: linear-gradient(100deg, var(--yellow), var(--pink)); -webkit-background-clip: text; background-clip: text; color: transparent; padding: 4px 0; }
 .who.sm { font-size: clamp(30px, 9vw, 46px); }
 #s-handoff .btn.big { max-width: 360px; margin-top: 12px; }
+#s-handoff .skip-song { max-width: 360px; width: 100%; font-weight: 600; font-size: 14px; }
 
 /* listen / karaoke */
 .karaoke { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; text-align: center; min-height: 220px; }

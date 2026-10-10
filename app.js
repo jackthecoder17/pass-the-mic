@@ -185,6 +185,7 @@ function showLoading() {
   $('#handName').textContent = S.players[S.cur]?.name || '';
   $('#handSong').textContent = 'Loading the next song…';
   $('#readyBtn').disabled = true;
+  $('#skipSongBtn').classList.add('hidden');
   show('handoff');
 }
 const SYNC_WARN = 'Heads up: the lyrics for this one may be slightly off. Use 🎯 Fix sync while it plays.';
@@ -368,8 +369,21 @@ function goHandoff() {
   $('#handName').textContent = S.players[S.cur].name;
   $('#handSong').textContent = S.songTurns === 0 ? `🎵 ${S.mode === 'pack' ? 'Next song' : 'Song'}: ${S.song.title} · ${S.song.artist}` : '';
   $('#readyBtn').disabled = false;
+  $('#skipSongBtn').classList.remove('hidden');
   show('handoff');
 }
+
+// nobody knows it? move on: no lives lost, same player keeps their turn
+function skipSong() {
+  if (!S.song) return;
+  player?.pauseVideo?.();
+  S.phase = 'idle';
+  toast(`Skipped “${S.song.title}”`);
+  if (S.mode === 'pack') nextPackSong();
+  else { S.song = null; show('song'); }
+}
+$('#skipSongBtn').onclick = skipSong;
+$('#skipSongBtn2').onclick = () => { if (S.phase === 'listen') skipSong(); };
 
 // choose the next stretch of lyrics for the current player to sing
 function pickSection(from) {

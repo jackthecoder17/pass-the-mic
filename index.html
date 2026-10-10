@@ -89,6 +89,7 @@
     <div class="who" id="handName"></div>
     <p class="muted small narrow">Listen closely. When the music stops, it's your turn to carry on.</p>
     <button class="btn big" id="readyBtn">I'm ready ▶</button>
+    <button class="btn ghost skip-song" id="skipSongBtn" type="button">Don't know this one? Skip song ⏭</button>
   </section>
 
   <!-- LISTEN -->
@@ -106,7 +107,10 @@
         <button class="chip" data-sync="0.3" type="button" aria-label="Lyrics are late">+ 0.3s</button>
         <span class="muted small" id="syncVal"></span>
       </div>
-      <button class="chip" id="skipBtn" type="button">Skip ahead ⏭</button>
+      <div class="sync">
+        <button class="chip" id="skipBtn" type="button">Jump to my part ⏩</button>
+        <button class="chip" id="skipSongBtn2" type="button">Skip song ⏭</button>
+      </div>
     </div>
     <div id="syncPanel" class="sync-panel hidden">
       <p><b>Tap a line the moment the singer starts it</b></p>
