@@ -14,6 +14,8 @@ const S = {
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+// [PTM] debug lines in the console (read while testing; harmless for players)
+const dbg = (...a) => console.log('[PTM]', ...a);
 const passMark = () => Math.min(80, 65 + (S.round - 1) * 5); // 65% → 80%: strict, but leaves room for speech-to-text slips
 const hintCount = () => (S.round <= 2 ? 1 : 0); // early rounds show the first word, so it doesn't count
 const alive = () => S.players.filter((p) => p.lives > 0 && !p.gone); // gone = dropped out of an online room (may come back)
@@ -681,8 +683,11 @@ function beginListening() {
   let allIn = false;
   // two "ears" can report: the phone's own recognizer (instant) and Whisper (more accurate).
   // A word counts if either heard it; the transcript shown is whichever matched more.
+  const turnT0 = performance.now();
+  dbg('turn start', JSON.stringify({ lyric: sec.words.map((w) => w.d).join(' '), passMark: passMark(), hint: hintCount(), cloud: S.cloud, liveSR: !!SR && !IS_IOS }));
   const onText = (src) => (text) => {
     if (S.phase !== 'turn') return;
+    if (S.heardBy[src] !== text) dbg(`+${((performance.now() - turnT0) / 1000).toFixed(1)}s ${src}:`, JSON.stringify(text));
     S.heardBy[src] = text;
     const { sims, text: best } = bestOf(expected);
     S.heard = best;
@@ -754,6 +759,13 @@ function scoreTurn() {
   const sec = S.section;
   const r = score(sec.words.map((w) => w.n), tokenize(S.heard).map((w) => w.n), { hint: hintCount() });
   const pct = Math.round(r.score * 100);
+  const exp = sec.words.map((w) => w.n);
+  dbg('GRADE', JSON.stringify({
+    lyric: sec.words.map((w) => w.d).join(' '),
+    engines: Object.fromEntries(Object.entries(S.heardBy || {}).map(([k, t]) => [k, { heard: t, pct: Math.round(score(exp, tokenize(t).map((w) => w.n), { hint: hintCount() }).score * 100) }])),
+    used: S.heard, pct, passMark: passMark(),
+    words: sec.words.map((w, i) => `${w.d}${r.sims[i] ? '✓' : '✗'}`).join(' '),
+  }));
   const noMic = S.turnCloud ? S.micBlocked || (S.cloudFailed && !S.heard) : !SR || S.micBlocked;
   if (S.net) {
     const res = { pct, sims: r.sims, heard: S.heard, noMic };
@@ -1520,10 +1532,12 @@ async function pump(st, final = false) {
   const size = st.chunks.reduce((n, c) => n + c.size, 0);
   if (!final && size - st.sent < 5000) return; // nothing new worth sending yet
   if (!final && st.voiced < 300) return; // nobody has sung anything yet
-  if (final && st.voiced < 400) { st.text = ''; st.ok++; return; } // silence: don't let Whisper imagine words
+  if (final && st.voiced < 400) { dbg(`whisper skipped: only ${st.voiced}ms of voice`); st.text = ''; st.ok++; return; } // silence: don't let Whisper imagine words
   st.inflight = true; st.sent = size;
   try {
+    const t0 = performance.now();
     const text = await transcribe(new Blob(st.chunks, { type: st.mime }), st.prompt, st.lang, final);
+    dbg(`whisper ${final ? 'FINAL' : 'partial'} ${Math.round(performance.now() - t0)}ms ${(size / 1024).toFixed(0)}KB voiced=${st.voiced}ms:`, JSON.stringify(text));
     st.ok++;
     if (text || final) { st.text = text || st.text; if (cRec === st || final) st.onText(st.text); }
   } catch (e) { console.warn(e); }
