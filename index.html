@@ -4,38 +4,44 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Pass The Mic</title>
-<meta name="description" content="The sing-the-next-line party game. Pick a song, pass the phone — when the music stops, you sing. The AI is listening.">
-<meta name="theme-color" content="#0e0817">
+<meta name="description" content="The sing-the-next-line party game. Pick a song, pass the phone (or play online) — when the music stops, you sing. The AI is listening.">
+<meta name="theme-color" content="#120a07">
 <meta property="og:title" content="Pass The Mic 🎤">
 <meta property="og:description" content="When the music stops, you sing the next line. Miss it, lose a life. Last one singing wins.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Unbounded:wght@600;800;900&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="bg" aria-hidden="true"><i></i><i></i><i></i></div>
+<div class="bg" aria-hidden="true"></div>
 <canvas id="confetti" aria-hidden="true"></canvas>
+<!-- the music-cut moment: flash + STOP! -->
+<div id="cutFx" class="cut-fx" aria-hidden="true"><i class="flash"></i><b>STOP!</b></div>
+<!-- YouTube player: positioned over whichever .tv-slot is on screen (moving an iframe would reload it) -->
+<div id="ytwrap" class="parked"><div id="yt"></div><span class="live-tag">LIVE</span></div>
 
 <main id="app">
   <header id="board" class="board hidden"></header>
-  <div id="ytwrap"><div id="yt"></div></div>
 
   <!-- HOME -->
   <section id="s-home" class="screen active">
     <div class="hero">
-      <div class="logo">PASS<br>THE <span>MIC</span></div>
-      <p class="tag">Pick a song. Pass the phone. When the music stops, <b>you sing the next line.</b> The AI is listening 👂</p>
+      <div class="logo-wrap">
+        <div class="logo-disc" aria-hidden="true"><span>🎤</span></div>
+        <h1 class="logo">PASS<br>THE <span>MIC</span></h1>
+      </div>
+      <p class="tag">When the music stops, <b>you sing the next line.</b> Miss it, lose a life. The AI is listening 👂</p>
       <div class="col">
-        <button class="btn big" id="startBtn">📱 Play on one phone</button>
-        <button class="btn big alt" id="onlineBtn">🌍 Play online with friends</button>
+        <button class="btn hot big" id="startBtn">📱 Play on one phone</button>
+        <button class="btn ghost big" id="onlineBtn">🌍 Play online with friends</button>
       </div>
       <ol class="how">
         <li><span>🎵</span><div><b>The song plays</b> with lyrics on screen</div></li>
         <li><span>⏸️</span><div><b>It suddenly cuts out</b> and the lyrics vanish</div></li>
         <li><span>🎤</span><div><b>You carry on singing</b> from memory</div></li>
-        <li><span>💔</span><div><b>Miss it, lose a life.</b> Last one singing wins.</div></li>
+        <li><span>💀</span><div><b>Miss it, lose a life.</b> Last one singing wins.</div></li>
       </ol>
     </div>
   </section>
@@ -43,16 +49,16 @@
   <!-- ONLINE: create / join -->
   <section id="s-online" class="screen">
     <div class="topbar"><button class="back" type="button" id="onlineBack">← Home</button></div>
-    <h2>Play online</h2>
+    <h2>PLAY ONLINE</h2>
     <p class="muted small">Everyone plays on their own phone, wherever they are. Tip: jump on a WhatsApp call so you can hear each other sing 😂</p>
     <label class="field">Your name
       <input id="myName" placeholder="Your name" maxlength="14" autocomplete="nickname">
     </label>
-    <button class="btn big" id="createRoom" type="button">✨ Create a room</button>
+    <button class="btn hot big" id="createRoom" type="button">✨ Create a room</button>
     <div class="or"><span>or join a friend</span></div>
     <form id="joinForm" class="row">
-      <input id="joinCode" placeholder="Room code" maxlength="4" autocomplete="off" autocapitalize="characters" class="code-in">
-      <button class="btn" type="submit">Join</button>
+      <input id="joinCode" placeholder="CODE" maxlength="4" autocomplete="off" autocapitalize="characters" class="code-in">
+      <button class="btn cream" type="submit">Join</button>
     </form>
     <p id="onlineStatus" class="status"></p>
   </section>
@@ -60,13 +66,14 @@
   <!-- ONLINE: lobby -->
   <section id="s-lobby" class="screen">
     <div class="topbar"><button class="back" type="button" id="lobbyBack">← Leave room</button></div>
-    <div class="center col">
-      <p class="kicker">Room code</p>
-      <div class="room-code" id="roomCode">····</div>
-      <button class="btn ghost" id="shareRoom" type="button">📲 Invite friends</button>
+    <div class="ticket">
+      <div class="lbl">ROOM CODE</div>
+      <div class="code" id="roomCode">····</div>
+      <div class="perf"></div>
+      <button class="inv" id="shareRoom" type="button">📲 Invite the squad</button>
     </div>
-    <h3 id="lobbyCount">Players</h3>
-    <ul id="lobbyList" class="lobby-list"></ul>
+    <p class="kicker" id="lobbyCount">Who's in</p>
+    <ul id="lobbyList" class="crowd"></ul>
     <div class="opts">
       <label id="livesWrap">Lives
         <select id="lobbyLives"><option>1</option><option>2</option><option selected>3</option><option>5</option></select>
@@ -77,18 +84,18 @@
     </div>
     <button class="btn ghost" id="readyUp" type="button">🎧 Tap when ready (turns on sound + mic)</button>
     <p id="lobbyStatus" class="status center-text"></p>
-    <button class="btn big" id="lobbyStart" type="button">🎵 Pick the music →</button>
+    <button class="btn hot big push" id="lobbyStart" type="button">🎵 PICK THE MUSIC</button>
   </section>
 
-  <!-- PLAYERS -->
+  <!-- PLAYERS (one phone) -->
   <section id="s-players" class="screen">
     <div class="topbar"><button class="back" type="button" id="playersBack">← Home</button></div>
-    <h2>Who's playing?</h2>
+    <h2>WHO'S PLAYING?</h2>
     <form id="addForm" class="row">
       <input id="nameIn" placeholder="Player name" maxlength="14" autocomplete="off" enterkeyhint="done">
-      <button class="btn" type="submit">Add</button>
+      <button class="btn cream" type="submit">Add</button>
     </form>
-    <ul id="plist" class="plist"></ul>
+    <ul id="plist" class="crowd"></ul>
     <div class="opts">
       <label>Lives
         <select id="livesSel"><option>1</option><option>2</option><option selected>3</option><option>5</option></select>
@@ -102,50 +109,61 @@
       <p id="micOut" class="muted small"></p>
     </div>
     <p id="srWarn" class="warn hidden">This browser can't listen to singing. Use Chrome or Safari. You can still play: the room will vote on every turn.</p>
-    <button class="btn big" id="toSong" disabled>Pick a song →</button>
+    <button class="btn hot big push" id="toSong" disabled>PICK THE MUSIC →</button>
   </section>
 
   <!-- SONG -->
   <section id="s-song" class="screen">
     <div class="topbar"><button class="back" type="button" id="songBack">← Players</button></div>
-    <h2>Pick the music</h2>
+    <h2>PICK THE MUSIC</h2>
     <form id="searchForm" class="row">
       <input id="q" placeholder="Search any song or artist…" autocomplete="off" enterkeyhint="search">
-      <button class="btn" type="submit">Search</button>
+      <button class="btn cream" type="submit">Search</button>
     </form>
     <p class="muted small">▶ Play one now, or <b>+ Add</b> a few to build your own playlist. Everyone can add their favourite.</p>
     <p id="searchStatus" class="status"></p>
     <ul id="results" class="results"></ul>
-    <h3>Or pick a vibe</h3>
+    <p class="kicker">Or pick a vibe</p>
     <p class="muted small">Each song lasts one round, then the next one in the pack starts.</p>
     <p id="songStatus" class="status"></p>
     <div id="packs" class="packs"></div>
     <div id="tray" class="tray hidden">
-      <div class="tray-top"><b id="trayCount"></b><button class="btn" id="trayStart" type="button">Start ▶</button></div>
+      <div class="tray-top"><b id="trayCount"></b><button class="btn hot" id="trayStart" type="button">START ▶</button></div>
       <div id="trayList" class="tray-list"></div>
     </div>
   </section>
 
-  <!-- HANDOFF -->
+  <!-- HANDOFF / UP NEXT -->
   <section id="s-handoff" class="screen center">
     <p class="kicker" id="roundInfo"></p>
     <p class="next-song" id="handSong"></p>
+    <div id="handAv" class="hand-av"></div>
     <p class="muted" id="handLead">Pass the phone to</p>
     <div class="who" id="handName"></div>
     <p class="muted small narrow" id="handHint">Listen closely. When the music stops, it's your turn to carry on.</p>
-    <p class="kicker hidden" id="handCount"></p>
-    <button class="btn big" id="readyBtn">I'm ready ▶</button>
+    <p class="countin hidden" id="handCount"></p>
+    <button class="btn hot big" id="readyBtn">I'M READY ▶</button>
     <button class="btn ghost skip-song" id="skipSongBtn" type="button">Don't know this one? Skip song ⏭</button>
   </section>
 
   <!-- LISTEN -->
   <section id="s-listen" class="screen">
+    <div class="deck">
+      <div class="tv-slot" aria-hidden="true"></div>
+      <div class="vinyl" id="vinyl"><img id="vinylArt" alt=""><span class="hole"></span></div>
+      <div class="arm" aria-hidden="true"></div>
+    </div>
+    <div class="np"><b id="npTitle"></b><small id="npArtist"></small></div>
     <div class="karaoke" id="kara">
       <p class="kl prev"></p>
       <p class="kl cur"></p>
       <p class="kl next"></p>
     </div>
-    <p class="listen-hint"><span class="pulse"></span><b id="listenName"></b>, stay ready… the music could stop any second</p>
+    <div class="upnext">
+      <span id="upAv"></span>
+      <div class="t">When the music stops<b><span id="listenName"></span> TAKES OVER</b></div>
+      <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    </div>
     <div class="tools">
       <div class="sync">
         <button class="chip" id="syncBtn" type="button">🎯 Fix sync</button>
@@ -166,41 +184,58 @@
   </section>
 
   <!-- TURN -->
-  <section id="s-turn" class="screen center">
-    <div class="who sm" id="turnName"></div>
-    <div class="go" id="goTxt">CONTINUE!</div>
+  <section id="s-turn" class="screen center spot">
+    <div class="ring" id="ring">
+      <svg viewBox="0 0 132 132" aria-hidden="true"><circle class="bg" cx="66" cy="66" r="62"/><circle class="fg" id="timerBar" cx="66" cy="66" r="62"/></svg>
+      <span id="turnAv"></span>
+    </div>
+    <div class="who-sm" id="turnName"></div>
+    <div class="go" id="goTxt">YOUR TURN</div>
     <p class="cue" id="cue"></p>
+    <div class="wave" id="wave" aria-hidden="true"></div>
     <div class="chips" id="chips"></div>
-    <div class="timer"><i id="timerBar"></i></div>
     <p class="heard" id="heard"></p>
-    <button class="btn" id="doneBtn" type="button">Done ✓</button>
+    <button class="btn ghost" id="doneBtn" type="button">Done ✓</button>
   </section>
 
   <!-- REVEAL -->
   <section id="s-reveal" class="screen center">
-    <div class="score" id="scoreNum">0%</div>
+    <p class="kicker" id="revWho"></p>
+    <div class="verdict-wrap">
+      <div class="dial">
+        <svg viewBox="0 0 150 150" aria-hidden="true"><defs><linearGradient id="dg" x1="0" x2="1"><stop offset="0" stop-color="#ffc23d"/><stop offset="1" stop-color="#19e68c"/></linearGradient></defs><circle class="bg" cx="75" cy="75" r="65"/><circle class="fg" id="dialFg" cx="75" cy="75" r="65"/></svg>
+        <b id="scoreNum">0%</b>
+      </div>
+      <div class="stamp hidden" id="stamp"></div>
+    </div>
     <div class="verdict" id="verdict"></div>
-    <div class="chips" id="revChips"></div>
+    <div class="chips flaps" id="revChips"></div>
     <p class="heard" id="revHeard"></p>
     <div id="voteBox" class="vote hidden">
       <p>The AI can't decide. <b>The room decides:</b></p>
       <div class="row">
-        <button class="btn pass" id="votePass" type="button">👍 Pass</button>
-        <button class="btn fail" id="voteFail" type="button">👎 Fail</button>
+        <button class="btn pass" id="votePass" type="button">👍 PASS</button>
+        <button class="btn fail" id="voteFail" type="button">👎 FAIL</button>
       </div>
     </div>
-    <button class="btn big hidden" id="contBtn" type="button">Continue →</button>
+    <button class="btn hot big hidden" id="contBtn" type="button">NEXT SINGER →</button>
     <p class="muted small hidden" id="waitHost">Waiting for the host to continue…</p>
+    <div class="standings" id="standings"></div>
+    <div class="replay-box">
+      <p class="kicker">🔁 The real line</p>
+      <div class="tv-slot wide" aria-hidden="true"></div>
+    </div>
   </section>
 
-  <!-- END / SONG OVER -->
+  <!-- END -->
   <section id="s-end" class="screen center">
     <p class="kicker" id="endKicker"></p>
+    <div id="endAv" class="end-av"></div>
     <div class="who" id="endTitle"></div>
     <ol class="rank" id="rank"></ol>
     <div class="col">
-      <button class="btn big" id="nextSong" type="button">Next song 🎵</button>
-      <button class="btn big" id="again" type="button">Play again 🔁</button>
+      <button class="btn hot big" id="nextSong" type="button">NEXT SONG 🎵</button>
+      <button class="btn hot big" id="again" type="button">PLAY AGAIN 🔁</button>
       <button class="btn ghost" id="endGame" type="button">End game</button>
       <button class="btn ghost" id="newPlayers" type="button">New players</button>
       <button class="btn ghost" id="endHome" type="button">🏠 Home</button>
@@ -211,7 +246,7 @@
 <div id="menu" class="sheet hidden" role="dialog" aria-modal="true" aria-labelledby="menuTitle">
   <div class="sheet-card">
     <p class="kicker" id="menuTitle">Game paused</p>
-    <button class="btn big" id="mResume" type="button">▶ Resume</button>
+    <button class="btn hot big" id="mResume" type="button">▶ RESUME</button>
     <button class="btn ghost" id="mSkip" type="button">⏭ Skip this song</button>
     <button class="btn ghost" id="mChange" type="button">🎵 Change music</button>
     <button class="btn ghost" id="mEnd" type="button">🏁 End game &amp; see results</button>

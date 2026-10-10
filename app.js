@@ -31,19 +31,34 @@ function show(id) {
   else if (id === 'song') $('#songBack').textContent = S.midGame && S.song ? '← Back to the game' : '← Players';
   $('#board').classList.toggle('hidden', !inGame);
   if (inGame) renderBoard();
-  $('#ytwrap').classList.toggle('show', id === 'listen' || id === 'reveal');
   $('#syncPanel').classList.add('hidden');
   // keep one history entry above the app so the phone's back button opens our menu instead of leaving
   if (id !== 'home' && history.state?.ptm !== 'guard') history.pushState({ ptm: 'guard' }, '');
   scrollTo(0, 0);
+  requestAnimationFrame(placeTV);
 }
+// the YouTube iframe can't be moved in the DOM (it would reload), so it floats over the visible .tv-slot
+function placeTV() {
+  const wrap = $('#ytwrap'), slot = document.querySelector('.screen.active .tv-slot');
+  if (!slot || !slot.offsetParent) { wrap.className = 'parked'; wrap.removeAttribute('style'); return; }
+  const r = slot.getBoundingClientRect();
+  wrap.className = '';
+  Object.assign(wrap.style, { left: `${r.left + scrollX}px`, top: `${r.top + scrollY}px`, width: `${r.width}px`, height: `${r.height}px` });
+}
+addEventListener('resize', placeTV);
+setInterval(placeTV, 400);
 
 function renderBoard() {
   $('#board').innerHTML =
     `<div class="board-top"><div class="songname">🎵 ${S.song ? esc(S.song.title) + ' · ' + esc(S.song.artist) : ''}</div>` +
     `<button class="menu-btn" type="button" data-menu aria-label="Pause menu">☰ Menu</button></div>` +
-    `<div class="pl">${S.players.map((p, i) => `<span class="pc ${i === S.cur ? 'cur' : ''} ${p.lives <= 0 || p.gone ? 'out' : ''} ${S.net && p.id === S.net.me.id ? 'me' : ''}"><b>${esc(p.name)}</b><span class="hearts">${p.gone ? '👋' : p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span></span>`).join('')}</div>`;
+    `<div class="pl">${S.players.map((p, i) => `<span class="pc ${i === S.cur ? 'cur' : ''} ${p.lives <= 0 || p.gone ? 'out' : ''} ${S.net && p.id === S.net.me.id ? 'me' : ''}">${avatar(p, 'sm')}<b>${esc(p.name)}</b><span class="hearts">${p.gone ? '👋' : p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span></span>`).join('')}</div>`;
 }
+
+// ---------- avatars: every player keeps a colour + face ----------
+const FACES = ['😎', '🤩', '🥳', '😜', '🤠', '😏', '🥸', '🤓', '😇', '🤪', '😺', '🦁'];
+function dress(p, i) { if (!p.c) { p.c = (i % 6) + 1; p.f = FACES[i % FACES.length]; } return p; }
+const avatar = (p, size = '', extra = '') => `<span class="av ${size} c${p?.c || 1} ${extra}">${p?.f || '🎤'}</span>`;
 
 // ---------- sound effects ----------
 let ac;
@@ -58,16 +73,40 @@ function beep(freq, dur = 0.12, type = 'sine', vol = 0.18, when = 0) {
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
   o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur);
 }
+// filtered noise burst (scratches, drums, crowd)
+function noise(dur, { when = 0, vol = 0.3, from = 2000, to = 400, q = 1.2, type = 'bandpass' } = {}) {
+  if (!ac) return;
+  const t = ac.currentTime + when, len = Math.ceil(ac.sampleRate * dur);
+  const buf = ac.createBuffer(1, len, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  src.buffer = buf; f.type = type; f.Q.value = q;
+  f.frequency.setValueAtTime(from, t); f.frequency.exponentialRampToValueAtTime(to, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  src.connect(f).connect(g).connect(ac.destination); src.start(t); src.stop(t + dur);
+}
 const sfx = {
   tick: () => beep(660, 0.1),
   go: () => beep(1320, 0.18),
-  pass: () => { beep(660, 0.12, 'triangle', 0.2); beep(880, 0.12, 'triangle', 0.2, 0.1); beep(1320, 0.25, 'triangle', 0.2, 0.2); },
-  fail: () => beep(220, 0.5, 'sawtooth', 0.12),
+  // record scratch: two fast filter sweeps
+  scratch: () => { noise(0.16, { from: 900, to: 3800, vol: 0.5, q: 3 }); noise(0.22, { when: 0.15, from: 3600, to: 500, vol: 0.45, q: 3 }); beep(140, 0.25, 'sawtooth', 0.08, 0.02); },
+  drumroll: (dur = 0.9) => { for (let t = 0; t < dur; t += 0.045) noise(0.05, { when: t, from: 1800, to: 900, vol: 0.12 + 0.12 * (t / dur), q: 0.8 }); },
+  pass: () => {
+    noise(0.12, { from: 200, to: 60, vol: 0.5, type: 'lowpass', q: 0.7 }); // the stamp thud
+    [523, 659, 784, 1047].forEach((f, i) => beep(f, 0.22, 'triangle', 0.18, 0.08 + i * 0.09));
+    noise(1.4, { when: 0.2, from: 2500, to: 1200, vol: 0.09, q: 0.4 }); // crowd
+  },
+  fail: () => { // sad trombone: wah wah wah waaah
+    noise(0.12, { from: 200, to: 60, vol: 0.5, type: 'lowpass', q: 0.7 });
+    [[311, 0.1], [294, 0.45], [277, 0.8]].forEach(([f, w]) => beep(f, 0.32, 'sawtooth', 0.09, w));
+    beep(262, 0.9, 'sawtooth', 0.09, 1.15);
+  },
 };
+const buzz = (ms) => { try { navigator.vibrate?.(ms); } catch {} };
 
 // ---------- players ----------
 function renderPlayers() {
-  $('#plist').innerHTML = S.players.map((p, i) => `<li>${esc(p.name)}<button type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('');
+  $('#plist').innerHTML = S.players.map((p, i) => `<li>${avatar(dress(p, i), 'lg')}${esc(p.name)}<button class="rm" type="button" data-rm="${i}" aria-label="Remove ${esc(p.name)}">✕</button></li>`).join('');
   $('#toSong').disabled = !S.players.length;
 }
 $('#startBtn').onclick = () => { unlockAudio(); show('players'); $('#nameIn').focus(); };
@@ -77,13 +116,15 @@ $('#addForm').onsubmit = (e) => {
   if (!name) return;
   if (S.players.length >= 12) return toast('Max 12 players');
   if (S.players.some((p) => p.name.toLowerCase() === name.toLowerCase())) return toast('Name already taken');
-  S.players.push({ name });
+  const used = new Set(S.players.map((p) => p.c));
+  const slot = [0, 1, 2, 3, 4, 5].find((k) => !used.has(k + 1)) ?? S.players.length;
+  S.players.push(dress({ name }, slot + (S.players.length >= 6 ? 6 : 0)));
   $('#nameIn').value = '';
   renderPlayers();
   $('#nameIn').focus();
 };
 $('#plist').onclick = (e) => {
-  const i = e.target.dataset.rm;
+  const i = e.target.closest('[data-rm]')?.dataset.rm;
   if (i != null) { S.players.splice(+i, 1); renderPlayers(); }
 };
 if (!SR) { $('#srWarn').classList.remove('hidden'); $('#micTest').classList.add('hidden'); }
@@ -188,6 +229,7 @@ async function resolvePicked(item) {
 function showLoading() {
   $('#roundInfo').textContent = S.pack || '';
   $('#handName').textContent = S.players[S.cur]?.name || '';
+  $('#handAv').innerHTML = avatar(S.players[S.cur], 'xl');
   $('#handSong').textContent = 'Loading the next song…';
   $('#readyBtn').disabled = true;
   $('#skipSongBtn').classList.add('hidden');
@@ -378,6 +420,7 @@ function goHandoff() {
   $('#readyBtn').classList.remove('hidden');
   $('#roundInfo').textContent = `Round ${S.round} · pass mark ${passMark()}%`;
   $('#handName').textContent = S.players[S.cur].name;
+  $('#handAv').innerHTML = avatar(S.players[S.cur], 'xl');
   $('#handSong').textContent = S.songTurns === 0 ? `🎵 ${S.mode === 'pack' ? 'Next song' : 'Song'}: ${S.song.title} · ${S.song.artist}` : '';
   $('#readyBtn').disabled = false;
   $('#skipSongBtn').classList.remove('hidden');
@@ -425,7 +468,13 @@ $('#readyBtn').onclick = () => {
   startListen();
 };
 function startListen() {
-  $('#listenName').textContent = S.players[S.cur].name;
+  const p = S.players[S.cur];
+  $('#listenName').textContent = isMe(S.cur) ? 'YOU' : p.name;
+  $('#upAv').innerHTML = avatar(p, 'sm');
+  $('#npTitle').textContent = S.song.title;
+  $('#npArtist').textContent = S.song.artist + (S.pack ? ` · ${S.pack}` : '');
+  $('#vinylArt').src = `https://i.ytimg.com/vi/${S.song.ids[S.song.idx]}/hqdefault.jpg`;
+  $('#vinyl').classList.remove('stopped');
   $('#skipSongBtn2').classList.toggle('hidden', !!S.net && !S.net.host);
   lastKara = -2;
   show('listen');
@@ -482,7 +531,7 @@ function loop() {
   const t = lyricTime();
   if (S.phase === 'listen') {
     renderKaraoke(t);
-    if (t >= S.section.start - 0.12) { player.pauseVideo(); startTurn(); }
+    if (t >= S.section.start - 0.12) { player.pauseVideo(); theCut(); }
   } else if (t >= S.section.end + 0.3) {
     player.pauseVideo();
     S.phase = 'reveal';
@@ -490,18 +539,51 @@ function loop() {
 }
 setInterval(loop, 40); // timer, not rAF: keeps working if the tab is backgrounded
 
+// the music stops: scratch, flash, shake, record grinds to a halt — then the spotlight
+function theCut() {
+  S.phase = 'cut';
+  unlockAudio(); sfx.scratch(); buzz([60, 40, 120]);
+  $('#vinyl').classList.add('stopped');
+  document.body.classList.remove('cutting'); void document.body.offsetWidth; document.body.classList.add('cutting');
+  setTimeout(() => { document.body.classList.remove('cutting'); if (S.phase === 'cut') startTurn(); }, 850);
+}
+
+// ring timer around the singer's avatar (f: 1 = full, 0 = empty)
+const setTimer = (f) => { $('#timerBar').style.strokeDashoffset = String(390 * (1 - Math.max(0, Math.min(1, f)))); };
+
+// voice waveform: bars jump when new words come in (from your mic, or the singer's phone online)
+const WAVE_N = 26;
+$('#wave').innerHTML = '<i></i>'.repeat(WAVE_N);
+let waveE = 0, waveOn = false;
+const kickWave = (amt = 1) => { waveE = Math.min(1.4, waveE + amt); };
+function waveLoop() {
+  if (!waveOn) return;
+  const bars = $('#wave').children, t = performance.now() / 1000;
+  waveE *= 0.93;
+  for (let i = 0; i < bars.length; i++) {
+    const shape = Math.abs(Math.sin(i * 1.7 + t * 6)) * 0.7 + Math.abs(Math.sin(i * 0.6 - t * 9)) * 0.3;
+    bars[i].style.height = `${6 + (8 + 42 * shape) * Math.min(1, 0.12 + waveE)}px`;
+  }
+  setTimeout(waveLoop, 70);
+}
+function startWave() { waveE = 0.3; if (!waveOn) { waveOn = true; waveLoop(); } }
+function stopWave() { waveOn = false; }
+
 // ---------- the turn ----------
 let turnTimer, countT;
 function startTurn() {
   S.phase = 'turn';
   const sec = S.section;
-  $('#turnName').textContent = S.players[S.cur].name;
+  const p = S.players[S.cur];
+  $('#turnName').textContent = isMe(S.cur) ? `${p.name} · that's you` : p.name;
+  $('#turnAv').innerHTML = avatar(p, 'xl');
   const cueLine = S.song.lines.slice(0, sec.i).reverse().find((l) => l.words.length);
   $('#cue').textContent = cueLine ? `“…${cueLine.text}”` : '';
   const hint = S.round <= 2 ? 1 : 0; // early rounds: show the first word so you know where to come in
   $('#chips').innerHTML = sec.words.map((w, i) => `<span class="w${i < hint ? ' hint' : ''}" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
   $('#heard').textContent = '';
-  $('#timerBar').style.transform = 'scaleX(1)';
+  setTimer(1);
+  startWave();
   $('#doneBtn').disabled = true;
   $('#doneBtn').classList.toggle('hidden', !!S.net && !isMe(S.cur));
   show('turn');
@@ -510,13 +592,13 @@ function startTurn() {
   const go = $('#goTxt');
   const steps = ['3', '2', '1'];
   let n = 0;
-  go.className = 'go'; go.textContent = 'CONTINUE!';
+  go.className = 'go'; go.textContent = 'YOUR TURN';
   sfx.tick();
   clearInterval(countT);
   countT = setInterval(() => {
-    if (n < steps.length) { go.className = 'go count'; go.textContent = steps[n++]; sfx.tick(); return; }
+    if (n < steps.length) { go.className = 'go count'; void go.offsetWidth; go.textContent = steps[n++]; sfx.tick(); return; }
     clearInterval(countT);
-    go.className = 'go sing'; go.textContent = 'SING! 🎤'; sfx.go();
+    go.className = 'go sing'; go.textContent = 'SING!'; sfx.go(); buzz(80);
     beginListening();
   }, 520);
 }
@@ -531,6 +613,7 @@ function beginListening() {
     const sims = align(expected, tokenize(text).map((w) => w.n)).sims;
     paintChips('#chips', sims, false);
     $('#heard').textContent = text ? `👂 “${text}”` : '';
+    kickWave(0.7);
     if (S.net) sendLive(sims, text);
   });
   $('#doneBtn').disabled = false;
@@ -538,7 +621,7 @@ function beginListening() {
   clearInterval(turnTimer);
   turnTimer = setInterval(() => {
     const f = 1 - (performance.now() - t0) / 1000 / dur;
-    $('#timerBar').style.transform = `scaleX(${Math.max(0, f)})`;
+    setTimer(f);
     if (f <= 0) finishTurn();
   }, 50);
 }
@@ -555,6 +638,7 @@ function paintChips(sel, sims, final) {
 function finishTurn() {
   if (S.phase !== 'turn') return;
   S.phase = 'scoring';
+  stopWave();
   clearInterval(turnTimer); clearInterval(countT);
   $('#doneBtn').disabled = true;
   stopRec();
@@ -586,7 +670,14 @@ function scoreTurn() {
 // reveal screen: score, green/red words, and the real line played back
 function showReveal({ pct, sims, heard, noMic, verdict }, after) {
   const sec = S.section;
+  stopWave();
+  const p = S.players[S.cur];
+  $('#revWho').textContent = `${p?.name || ''} · Round ${S.round}`;
+  $('#stamp').className = 'stamp hidden';
+  $('#dialFg').style.strokeDashoffset = '408.4';
+  $('#standings').innerHTML = '';
   $('#revChips').innerHTML = $('#chips').innerHTML || sec.words.map((w) => `<span class="w" style="--len:${Math.max(2, w.d.length)}"><b>${esc(w.d)}</b></span>`).join('');
+  document.querySelectorAll('#revChips .w').forEach((el, i) => { el.classList.remove('hint'); el.style.animationDelay = `${0.9 + i * 0.09}s`; });
   if (noMic) document.querySelectorAll('#revChips .w').forEach((el) => el.classList.add('show'));
   else paintChips('#revChips', sims, true);
   $('#revHeard').textContent = noMic ? 'Here are the real lyrics. Did they get it?' : heard ? `AI heard: “${heard}”` : 'AI heard: nothing 🤐';
@@ -596,9 +687,12 @@ function showReveal({ pct, sims, heard, noMic, verdict }, after) {
   const v = $('#verdict');
   v.className = 'verdict'; v.textContent = '';
   show('reveal');
-  if (noMic) $('#scoreNum').textContent = '🎤❓';
+  if (noMic) $('#scoreNum').textContent = '🎤?';
+  else sfx.drumroll(0.9);
   (noMic ? (f) => f() : (f) => countUp($('#scoreNum'), pct, f))(() => {
-    if (verdict === 'vote') { v.className = 'verdict vote'; v.textContent = noMic ? 'MIC IS OFF · ROOM DECIDES' : 'TOO CLOSE TO CALL 🤔'; }
+    if (verdict === 'vote') {
+      v.className = 'verdict vote'; v.textContent = noMic ? 'MIC IS OFF · THE ROOM DECIDES' : 'TOO CLOSE TO CALL · THE ROOM DECIDES';
+    }
     after();
   });
   // play the real line so the room hears what it should have been
@@ -610,8 +704,9 @@ function showReveal({ pct, sims, heard, noMic, verdict }, after) {
 function countUp(el, to, done) {
   const t0 = performance.now(), d = 900;
   (function f(now) {
-    const k = Math.min(1, (now - t0) / d);
-    el.textContent = Math.round(to * (1 - Math.pow(1 - k, 3))) + '%';
+    const k = Math.min(1, (now - t0) / d), v = to * (1 - Math.pow(1 - k, 3));
+    el.textContent = Math.round(v) + '%';
+    $('#dialFg').style.strokeDashoffset = String(408.4 * (1 - v / 100));
     if (k < 1) requestAnimationFrame(f); else done();
   })(t0);
 }
@@ -623,16 +718,25 @@ function applyResult(pass, pct) {
   if (pass) { p.points += Math.max(pct, passMark()); p.passes++; }
   else p.lives = Math.max(0, p.lives - 1);
 }
+function stamp(text, kind) {
+  const el = $('#stamp');
+  el.className = 'stamp hidden'; void el.offsetWidth;
+  el.textContent = text; el.className = `stamp ${kind}`;
+}
 function showVerdict(pass) {
   const p = S.players[S.cur], v = $('#verdict');
   if (pass) {
-    v.className = 'verdict pass'; v.textContent = ['NAILED IT ✅', 'STAR! 🌟', 'CORRECT 🔥', 'ON KEY 🎤'][Math.floor(Math.random() * 4)];
-    sfx.pass();
+    stamp('PASS', 'pass');
+    v.className = 'verdict pass'; v.textContent = ['NAILED IT 🔥', 'STAR BEHAVIOUR 🌟', 'CORRECT! 🎤', 'ON KEY ✨'][Math.floor(Math.random() * 4)];
+    sfx.pass(); buzz(60);
   } else {
+    const out = p.gone || p.lives <= 0;
+    stamp(out ? 'OUT' : 'MISS', 'fail');
     v.className = 'verdict fail';
-    v.textContent = p.gone ? `${p.name.toUpperCase()} LEFT 👋` : p.lives > 0 ? `LOST A LIFE 💔 ${p.lives} left` : `${p.name.toUpperCase()} IS OUT 💀`;
-    sfx.fail();
+    v.textContent = p.gone ? `${p.name.toUpperCase()} LEFT 👋` : p.lives > 0 ? `LOST A LIFE 💔 ${p.lives} LEFT` : `${p.name.toUpperCase()} IS OUT 💀`;
+    sfx.fail(); buzz([100, 60, 200]);
   }
+  renderStandings(pass ? Math.max(S.result?.pct ?? S.lastPct ?? 0, passMark()) : null);
   $('#voteBox').classList.add('hidden');
   const canContinue = !S.net || S.net.host;
   $('#contBtn').classList.toggle('hidden', !canContinue);
@@ -661,12 +765,22 @@ $('#contBtn').onclick = () => {
   goHandoff();
 };
 
+// mini leaderboard on the reveal screen
+function renderStandings(gain) {
+  const cur = S.players[S.cur];
+  if (!cur) return ($('#standings').innerHTML = '');
+  const list = [...S.players].filter((p) => !p.gone || p === cur).sort((a, b) => b.points - a.points || b.lives - a.lives).slice(0, 4);
+  if (!list.includes(cur)) list[list.length - 1] = cur;
+  $('#standings').innerHTML = list.map((p) =>
+    `<div class="st ${p === cur ? 'me' : ''} ${p.lives <= 0 ? 'out' : ''}">${avatar(p, 'sm')}<span class="nm">${esc(p.name)} ${p === cur && gain ? `<span class="delta">+${gain}</span>` : ''}</span><span class="hearts">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}</span><span class="pts">${p.points}</span></div>`).join('');
+}
+
 // ---------- endings ----------
 function standings() {
   return [...S.players].sort((a, b) => (b.lives > 0) - (a.lives > 0) || b.lives - a.lives || b.points - a.points);
 }
 function renderRank() {
-  $('#rank').innerHTML = standings().map((p) => `<li><span class="nm">${esc(p.name)}</span><span class="st">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'} · ${p.passes} lines · ${p.points} pts</span></li>`).join('');
+  $('#rank').innerHTML = standings().map((p, i) => `<li><span class="pos">${i + 1}</span>${avatar(p, 'sm')}<span class="nm">${esc(p.name)}</span><span class="stt">${p.lives > 0 ? '❤️'.repeat(p.lives) : '💀'}<br>${p.passes} lines · ${p.points} pts</span></li>`).join('');
 }
 function endButtons(isFinal) {
   $('#nextSong').classList.toggle('hidden', isFinal);
@@ -682,6 +796,7 @@ function songOver() {
   if (S.net) { S.song = null; S.net.send('picking'); toast('Song over! Pick the next one 🎵'); return show('song'); }
   $('#endKicker').textContent = 'Song over 🎵';
   $('#endTitle').textContent = alive().length ? 'Still standing' : 'Everyone is out';
+  $('#endAv').innerHTML = '';
   renderRank(); endButtons(false);
   show('end');
 }
@@ -696,7 +811,9 @@ function showEnd(kicker) {
   player?.pauseVideo?.();
   const top = standings()[0];
   $('#endKicker').textContent = kicker;
-  $('#endTitle').textContent = S.players.length === 1 ? `${top.points} points` : `👑 ${top.name} wins!`;
+  $('#endTitle').textContent = S.players.length === 1 ? `${top.points} points` : `${top.name} wins!`;
+  $('#endAv').innerHTML = `<span class="crown">👑</span>${avatar(top, 'xl')}`;
+  sfx.pass();
   renderRank(); endButtons(true);
   if (S.net) {
     $('#again').classList.toggle('hidden', !S.net.host);
@@ -753,7 +870,7 @@ $('#mResume').onclick = () => {
   closeMenu();
   const p = pausedPhase; pausedPhase = null;
   if (p === 'listen' || p === 'reveal-play') { S.phase = p; player.playVideo(); }
-  else if (p === 'turn' || p === 'scoring') startTurn(); // a fresh attempt at the same lines
+  else if (p === 'turn' || p === 'scoring' || p === 'cut') startTurn(); // a fresh attempt at the same lines
   else S.phase = p || 'idle';
 };
 $('#mSkip').onclick = () => { closeMenu(); pausedPhase = null; skipSong(); };
@@ -766,6 +883,7 @@ $('#mClose').onclick = closeMenu;
 $('#mEnd').onclick = () => { closeMenu(); pausedPhase = null; endGame(); };
 $('#mQuit').onclick = () => { closeMenu(); pausedPhase = null; quitToHome(); };
 function quitToHome() {
+  stopWave();
   if (S.net) leaveRoom();
   stopRec(); clearInterval(turnTimer); clearInterval(countT);
   player?.pauseVideo?.();
@@ -867,8 +985,9 @@ function enterLobby() {
 function renderLobby(members) {
   if (!S.net) return;
   const host = members.find((m) => m.host);
-  $('#lobbyCount').textContent = `Players · ${members.length}`;
-  $('#lobbyList').innerHTML = members.map((m) => `<li><span class="nm">${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}</span>${m.host ? '<span class="tag">👑 host</span>' : ''}${m.ready ? '<span class="ok">✓ ready</span>' : '<span class="tag">not ready</span>'}</li>`).join('');
+  $('#lobbyCount').textContent = `Who's in · ${members.length}`;
+  $('#lobbyList').innerHTML = members.map((m, i) => `<li>${avatar(dress({}, i), 'lg', m.ready ? 'ready' : '')}${esc(m.name)}${m.id === ME.id ? ' <span class="tag">(you)</span>' : ''}<span class="tag ${m.host ? '' : m.ready ? 'ok' : ''}">${m.host ? '👑 host' : m.ready ? 'ready' : 'getting ready…'}</span></li>`).join('') +
+    '<li class="empty"><span class="av lg">＋</span><span class="tag">invite</span></li>';
   const ready = members.filter((m) => m.ready).length;
   if (S.net.host) $('#lobbyStatus').textContent = members.length < 2 ? 'Share the code. Your friends join from their own phones.' : `${ready}/${members.length} ready`;
   else if (!S.started && !$('#lobbyStatus').dataset.picking) $('#lobbyStatus').textContent = host ? `Waiting for ${host.name} to pick the music…` : '';
@@ -901,7 +1020,7 @@ $('#lobbyStart').onclick = () => {
   S.lang = $('#lobbyLang').value;
   S.net.track({ ready: true });
   S.lives = +$('#lobbyLives').value;
-  S.players = S.net.members().map((m) => ({ id: m.id, name: m.name }));
+  S.players = S.net.members().map((m, i) => dress({ id: m.id, name: m.name }, i));
   resetScores();
   S.started = true; S.midGame = false;
   S.net.send('picking');
@@ -934,7 +1053,7 @@ function hostSyncPlayers(members) {
   let changed = false, newcomer = false, singerLeft = false;
   for (const m of members) {
     const p = S.players.find((x) => x.id === m.id);
-    if (!p) { S.players.push({ id: m.id, name: m.name, lives: S.lives, points: 0, passes: 0 }); changed = newcomer = true; }
+    if (!p) { S.players.push(dress({ id: m.id, name: m.name, lives: S.lives, points: 0, passes: 0 }, S.players.length)); changed = newcomer = true; }
     else if (p.gone) { p.gone = false; changed = newcomer = true; } // came back (lives stay as they were)
   }
   for (const p of S.players) {
@@ -1003,7 +1122,8 @@ function handleSong(m) {
   stopAll();
   S.songKey = m.key; S.mode = m.mode; S.pack = m.pack; S.players = m.players;
   $('#handLead').textContent = 'Get ready';
-  $('#handName').textContent = '🎵';
+  $('#handName').textContent = 'NEXT SONG';
+  $('#handAv').innerHTML = '';
   $('#handSong').textContent = 'Loading the next song…';
   $('#handHint').textContent = '';
   $('#handCount').classList.add('hidden');
@@ -1028,7 +1148,8 @@ async function handleRound(m) {
   const me = isMe(S.cur), name = S.players[S.cur]?.name || '';
   $('#roundInfo').textContent = `Round ${S.round} · pass mark ${passMark()}%`;
   $('#handLead').textContent = me ? "You're up next" : 'Up next';
-  $('#handName').textContent = me ? 'YOU 🎤' : name;
+  $('#handName').textContent = me ? 'YOU' : name;
+  $('#handAv').innerHTML = avatar(S.players[S.cur], 'xl');
   $('#handSong').textContent = m.fresh ? `🎵 ${S.song.title} · ${S.song.artist}` : '';
   $('#handHint').textContent = me ? 'Listen closely. When the music stops, carry on singing.' : `Listen along. When the music stops, ${name} has to carry on.`;
   $('#readyBtn').classList.add('hidden'); $('#skipSongBtn').classList.add('hidden');
@@ -1051,13 +1172,13 @@ let specT, watchdogT;
 function spectate() {
   S.phase = 'spectate';
   const go = $('#goTxt');
-  go.className = 'go count'; go.textContent = 'IS SINGING 🎤';
+  go.className = 'go count'; go.textContent = 'IS SINGING';
   sfx.go();
   const sec = S.section, dur = Math.max(5, (sec.end - sec.start) * 1.35 + 2.5) + 2.4, t0 = performance.now();
   clearInterval(specT);
   specT = setInterval(() => {
     const f = 1 - (performance.now() - t0) / 1000 / dur;
-    $('#timerBar').style.transform = `scaleX(${Math.max(0, f)})`;
+    setTimer(f);
     if (f <= 0) clearInterval(specT);
   }, 100);
   if (S.live) paintLive(S.live);
@@ -1067,6 +1188,7 @@ function spectate() {
   }
 }
 function paintLive(m) {
+  kickWave(0.7);
   paintChips('#chips', m.sims || [], false);
   $('#heard').textContent = m.heard ? `👂 “${m.heard}”` : '';
 }
