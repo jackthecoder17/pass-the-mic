@@ -69,7 +69,7 @@ export function Listen() {
       <div className="np"><b id="npTitle">{l.title}</b><small id="npArtist">{l.artist}</small></div>
       <div className="karaoke" id="kara">
         <p className="kl prev">{k.prev}</p>
-        <p className={`kl cur${k.pop ? " pop" : ""}`} key={k.pop}>{k.cur}</p>
+        <p className={`kl cur${k.pop ? " pop" : ""}`} key={`kara${k.pop}`}>{k.cur}</p>
         <p className={`kl next${k.mystery ? " mystery" : ""}`}>{k.next}</p>
       </div>
       <div className="upnext">
@@ -111,7 +111,7 @@ export function Turn() {
         <span id="turnAv">{t.av && <Avatar p={t.av} size="xl" />}</span>
       </div>
       <div className="who-sm" id="turnName">{t.name}</div>
-      <FitText key={ui.go.key} id="goTxt" className={ui.go.cls} max={76}>{ui.go.text}</FitText>
+      <FitText key={`go${ui.go.key}`} id="goTxt" className={ui.go.cls} max={76}>{ui.go.text}</FitText>
       <p className="cue" id="cue">{t.cue}</p>
       <div className="wave" id="wave" aria-hidden="true" ref={refWave}>
         {Array.from({ length: WAVE_N }, (_, i) => <i key={i}></i>)}
@@ -141,10 +141,10 @@ export function Reveal() {
           {/* the count-up writes this directly (60fps), so React never renders its text */}
           <b id="scoreNum" ref={refScore} />
         </div>
-        <div className={ui.stamp.cls} id="stamp" key={ui.stamp.key}>{ui.stamp.text}</div>
+        <div className={ui.stamp.cls} id="stamp" key={`stamp${ui.stamp.key}`}>{ui.stamp.text}</div>
       </div>
       <div className={r.verdict.cls} id="verdict">{r.verdict.text}</div>
-      <div className="chips flaps" id="revChips" key={r.key}>
+      <div className="chips flaps" id="revChips" key={`chips${r.key}`}>
         {r.words.map((w, i) => (
           <span key={i} className={`w${r.ok[i] ? " ok" : ""}${r.miss[i] ? " miss" : ""}${r.show ? " show" : ""}`} style={{ ...len(w.d), animationDelay: `${0.9 + i * 0.09}s` }}><b>{w.d}</b></span>
         ))}
@@ -157,7 +157,7 @@ export function Reveal() {
           <button className="btn fail" id="voteFail" type="button" onClick={voteFail}>👎 FAIL</button>
         </div>
       </div>
-      <button key={ui.cont.key} className={`btn hot big${ui.cont.hidden ? " hidden" : ""}${ui.cont.counting ? " counting" : ""}`} id="contBtn" type="button" onClick={continueGame}>{ui.cont.label}</button>
+      <button key={`cont${ui.cont.key}`} className={`btn hot big${ui.cont.hidden ? " hidden" : ""}${ui.cont.counting ? " counting" : ""}`} id="contBtn" type="button" onClick={continueGame}>{ui.cont.label}</button>
       <button className={`hold${ui.hold ? "" : " hidden"}`} id="holdBtn" type="button" onClick={holdOn}>✋ Hold on</button>
       <p className={`muted small${r.wait ? "" : " hidden"}`} id="waitHost">Waiting for the host to continue…</p>
       <div className="standings" id="standings">

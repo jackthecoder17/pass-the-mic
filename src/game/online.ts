@@ -193,7 +193,7 @@ function stopAll() {
   S.phase = 'idle';
 }
 function guestPicking() {
-  stopAll();
+  stopAll(); earlyRound = null;
   S.started = true;
   ui.lobbyPicking = true;
   ui.lobbyStatus = '🎵 The host is picking the music…';
@@ -210,7 +210,7 @@ export function hostRound() {
   if (S.songKey !== key) { S.songKey = key; sendSong(); }
   const sec = pickSection(S.resumeAt);
   if (!sec) return songOver();
-  const m = { cur: S.players[S.cur].id, round: S.round, resumeAt: S.resumeAt, i: sec.i, j: sec.j, players: S.players, fresh: S.songTurns === 0 };
+  const m = { key: S.songKey, cur: S.players[S.cur].id, round: S.round, resumeAt: S.resumeAt, i: sec.i, j: sec.j, players: S.players, fresh: S.songTurns === 0 };
   S.net!.send('round', m);
   handleRound(m);
 }
@@ -223,13 +223,20 @@ function handleSong(m: Msg) {
   ui.hand = { ...ui.hand, lead: 'Get ready', name: 'NEXT SONG', av: null, song: 'Loading the next song…', hint: '', count: null, readyShow: false, skipShow: false };
   show('handoff');
   S.songLoading = setSong(m.song as RawSong).then(() => {
-    if (S.phase !== 'idle' || ui.screen !== 'handoff') return;
+    if (S.phase !== 'idle' || ui.screen !== 'handoff' || early) return;
     ui.hand = { ...ui.hand, song: `🎵 ${S.song!.title} · ${S.song!.artist}`, hint: "You'll jump in on the next turn." };
     emit();
   }).catch((e) => { console.warn(e); toast("Couldn't load this song."); });
+  // the round can overtake its song on the way here: start it now that the song is loading
+  const early = earlyRound?.key === m.key ? earlyRound : null;
+  earlyRound = null;
+  if (early) handleRound(early);
 }
+// a round message that arrived before the song it belongs to
+let earlyRound: Msg | null = null;
 let countInT: ReturnType<typeof setInterval> | undefined;
 async function handleRound(m: Msg) {
+  if (m.key !== S.songKey) { earlyRound = m; return; } // its song hasn't arrived yet
   await S.songLoading;
   if (!S.song || !S.net) return;
   stopAll();
