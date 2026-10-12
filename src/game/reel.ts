@@ -1,14 +1,17 @@
 // Highlight reel: turns the turns recorded on this phone into a shareable vertical video.
 // Everything happens on the device (canvas + Web Audio + MediaRecorder); nothing is uploaded.
 //
-// clip = { name, c, f, photo, lyric, heard, pct, pass, round, song, blob?, buffer? }
+import type { Clip } from './store';
+
+type G = CanvasRenderingContext2D;
+interface Moment extends Partial<Clip> { pass: boolean; pct: number; at: number; buffer?: AudioBuffer; _buf?: AudioBuffer | null; _img?: HTMLImageElement | null; _dur?: number; _env?: number[] }
 
 const W = 720, H = 1280, FPS = 30;
-const COLORS = { 1: '#ff6b1a', 2: '#19e68c', 3: '#ff2e63', 4: '#33d6ff', 5: '#a37bff', 6: '#ffc23d' };
+const COLORS: Record<number, string> = { 1: '#ff6b1a', 2: '#19e68c', 3: '#ff2e63', 4: '#33d6ff', 5: '#a37bff', 6: '#ffc23d' };
 const CLIP_MAX = 7, CARD = 0.9, HOLD = 1.6, INTRO = 1.8, OUTRO = 2.4;
 
 // funniest fails first, then the best pass; at most 4, played back in the order they happened
-export function pickMoments(clips) {
+export function pickMoments(clips: Moment[]) {
   const usable = clips.filter((c) => c.blob || c.buffer);
   const fails = usable.filter((c) => !c.pass).sort((a, b) => a.pct - b.pct).slice(0, 3);
   const best = usable.filter((c) => c.pass).sort((a, b) => b.pct - a.pct)[0];
@@ -18,7 +21,7 @@ export function pickMoments(clips) {
 }
 
 export function reelSupported() {
-  return !!(window.MediaRecorder && HTMLCanvasElement.prototype.captureStream && (window.AudioContext || window.webkitAudioContext));
+  return !!(window.MediaRecorder && 'captureStream' in HTMLCanvasElement.prototype && (window.AudioContext || (window as unknown as { webkitAudioContext?: unknown }).webkitAudioContext));
 }
 
 function pickMime() {
@@ -27,7 +30,7 @@ function pickMime() {
 }
 
 // trim leading silence so each clip starts on the first sung note
-function trimBuffer(ac, buf, maxSec) {
+function trimBuffer(ac: BaseAudioContext, buf: AudioBuffer, maxSec: number) {
   const d = buf.getChannelData(0), thr = 0.03;
   let start = 0;
   while (start < d.length && Math.abs(d[start]) < thr) start++;
@@ -39,7 +42,7 @@ function trimBuffer(ac, buf, maxSec) {
   return out;
 }
 
-async function loadImage(src) {
+async function loadImage(src?: string | null): Promise<HTMLImageElement | null> {
   if (!src) return null;
   return new Promise((ok) => {
     const im = new Image();
@@ -51,7 +54,7 @@ async function loadImage(src) {
 }
 
 // ---------- drawing helpers ----------
-function bg(g, t) {
+function bg(g: G, t: number) {
   g.fillStyle = '#120a07'; g.fillRect(0, 0, W, H);
   const r1 = g.createRadialGradient(W / 2, -120, 40, W / 2, -120, H * 0.75);
   r1.addColorStop(0, `rgba(255,107,26,${0.42 + 0.06 * Math.sin(t * 2)})`); r1.addColorStop(1, 'rgba(255,107,26,0)');
@@ -60,44 +63,44 @@ function bg(g, t) {
   r2.addColorStop(0, 'rgba(255,46,99,.22)'); r2.addColorStop(1, 'rgba(255,46,99,0)');
   g.fillStyle = r2; g.fillRect(0, 0, W, H);
 }
-function text(g, s, x, y, { size = 40, font = 'Anton', weight = 400, color = '#fff4e6', align = 'center', maxW = W - 80, lh = 1.1 } = {}) {
+function text(g: G, s: string, x: number, y: number, { size = 40, font = 'Anton', weight = 400, color = '#fff4e6', align = 'center' as CanvasTextAlign, maxW = W - 80, lh = 1.1 } = {}) {
   g.font = `${weight} ${size}px ${font === 'Anton' ? 'Anton, Impact, sans-serif' : '"DM Sans", system-ui, sans-serif'}`;
   g.fillStyle = color; g.textAlign = align; g.textBaseline = 'alphabetic';
-  const words = String(s).split(/\s+/), lines = [];
+  const words = String(s).split(/\s+/), lines: string[] = [];
   let line = '';
   for (const w of words) { const tryL = line ? line + ' ' + w : w; if (g.measureText(tryL).width > maxW && line) { lines.push(line); line = w; } else line = tryL; }
   if (line) lines.push(line);
   lines.forEach((l, i) => g.fillText(l, x, y + i * size * lh));
   return lines.length * size * lh;
 }
-function gradText(g, s, x, y, size) {
+function gradText(g: G, s: string, x: number, y: number, size: number) {
   g.font = `400 ${size}px Anton, Impact, sans-serif`; g.textAlign = 'center';
   const gr = g.createLinearGradient(0, y - size, 0, y);
   gr.addColorStop(0.2, '#fff4e6'); gr.addColorStop(1, '#ffc23d');
   g.fillStyle = gr; g.fillText(s, x, y);
 }
-function avatar(g, clip, img, cx, cy, r) {
+function avatar(g: G, clip: Moment, img: HTMLImageElement | null | undefined, cx: number, cy: number, r: number) {
   g.save();
   g.beginPath(); g.arc(cx, cy, r + 9, 0, Math.PI * 2); g.fillStyle = '#120a07'; g.fill();
-  g.beginPath(); g.arc(cx, cy, r + 6, 0, Math.PI * 2); g.strokeStyle = COLORS[clip.c] || '#ff6b1a'; g.lineWidth = 6; g.stroke();
+  g.beginPath(); g.arc(cx, cy, r + 6, 0, Math.PI * 2); g.strokeStyle = COLORS[clip.c ?? 0] || '#ff6b1a'; g.lineWidth = 6; g.stroke();
   g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.clip();
   if (img) g.drawImage(img, cx - r, cy - r, r * 2, r * 2);
   else {
     const gr = g.createRadialGradient(cx - r * 0.3, cy - r * 0.4, r * 0.1, cx, cy, r);
-    gr.addColorStop(0, '#fff'); gr.addColorStop(0.25, COLORS[clip.c] || '#ff6b1a'); gr.addColorStop(1, COLORS[clip.c] || '#ff6b1a');
+    gr.addColorStop(0, '#fff'); gr.addColorStop(0.25, COLORS[clip.c ?? 0] || '#ff6b1a'); gr.addColorStop(1, COLORS[clip.c ?? 0] || '#ff6b1a');
     g.fillStyle = gr; g.fillRect(cx - r, cy - r, r * 2, r * 2);
     g.font = `${r * 1.1}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(clip.f || '🎤', cx, cy + r * 0.05);
   }
   g.restore();
 }
-function pill(g, s, x, y, { bgc = '#fff4e6', fg = '#1a0d06', size = 26 } = {}) {
+function pill(g: G, s: string, x: number, y: number, { bgc = '#fff4e6', fg = '#1a0d06', size = 26 } = {}) {
   g.font = `800 ${size}px "DM Sans", system-ui, sans-serif`;
   const w = g.measureText(s).width + size * 1.4, h = size * 1.8;
   g.fillStyle = bgc; g.beginPath(); g.roundRect(x - w / 2, y - h / 2, w, h, h / 2); g.fill();
   g.fillStyle = fg; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(s, x, y + 1);
 }
-function stamp(g, pass, x, y, k) {
+function stamp(g: G, pass: boolean, x: number, y: number, k: number) {
   const s = 3 - 2 * Math.min(1, k * 4); // slam in from 3x
   g.save(); g.translate(x, y); g.rotate(-0.17); g.scale(s, s); g.globalAlpha = Math.min(1, k * 5);
   const col = pass ? '#19e68c' : '#ff2e63', label = pass ? 'PASS' : 'MISS';
@@ -107,7 +110,7 @@ function stamp(g, pass, x, y, k) {
   g.fillStyle = col; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(label, 0, 4);
   g.restore();
 }
-function dial(g, pct, x, y, r) {
+function dial(g: G, pct: number, x: number, y: number, r: number) {
   g.lineWidth = 18; g.lineCap = 'round';
   g.strokeStyle = 'rgba(255,244,230,.1)'; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.stroke();
   const gr = g.createLinearGradient(x - r, y, x + r, y); gr.addColorStop(0, '#ffc23d'); gr.addColorStop(1, '#19e68c');
@@ -115,7 +118,7 @@ function dial(g, pct, x, y, r) {
   g.font = '400 84px Anton, Impact, sans-serif'; g.fillStyle = '#fff4e6'; g.textAlign = 'center'; g.textBaseline = 'middle';
   g.fillText(`${Math.round(pct)}%`, x, y + 4);
 }
-function wave(g, levels, x, y, w, h, live) {
+function wave(g: G, levels: number[], x: number, y: number, w: number, h: number, live: boolean) {
   const n = levels.length, bw = w / n;
   for (let i = 0; i < n; i++) {
     const v = Math.max(0.06, levels[i]) * (live ? 1 : 0.35);
@@ -126,39 +129,39 @@ function wave(g, levels, x, y, w, h, live) {
 }
 
 // ---------- the reel ----------
-export async function makeReel(clips, { onProgress = () => {}, title = 'HIGHLIGHTS' } = {}) {
+export async function makeReel(clips: Moment[], { onProgress = (() => {}) as (k: number) => void, title = 'HIGHLIGHTS' } = {}) {
   const moments = pickMoments(clips);
   if (!moments.length) throw new Error('No recorded turns on this phone yet.');
   await Promise.all(['400 64px Anton', '800 26px "DM Sans"', '600 26px "DM Sans"'].map((f) => document.fonts.load(f).catch(() => {})));
 
-  const AC = window.AudioContext || window.webkitAudioContext;
+  const AC = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
   const ac = new AC();
   await ac.resume?.();
   const dest = ac.createMediaStreamDestination();
   // decode + trim each clip
   for (const m of moments) {
-    let buf = m.buffer;
+    let buf: AudioBuffer | null | undefined = m.buffer;
     if (!buf && m.blob) { try { buf = await ac.decodeAudioData(await m.blob.arrayBuffer()); } catch { buf = null; } }
     m._buf = buf ? trimBuffer(ac, buf, CLIP_MAX) : null;
     m._img = await loadImage(m.photo);
     m._dur = m._buf ? m._buf.duration : 2.5;
     // precompute a loudness envelope for the waveform
-    const env = [];
+    const env: number[] = [];
     if (m._buf) { const d = m._buf.getChannelData(0), step = Math.floor(m._buf.sampleRate / FPS); for (let i = 0; i < d.length; i += step) { let s = 0; for (let j = i; j < Math.min(d.length, i + step); j++) s += d[j] * d[j]; env.push(Math.min(1, Math.sqrt(s / step) * 6)); } }
     m._env = env;
   }
   // timeline
   let t = INTRO;
-  const segs = moments.map((m) => { const s = { m, card: t, sing: t + CARD, judge: t + CARD + m._dur, end: t + CARD + m._dur + HOLD }; t = s.end; return s; });
+  const segs = moments.map((m) => { const s = { m, card: t, sing: t + CARD, judge: t + CARD + m._dur!, end: t + CARD + m._dur! + HOLD }; t = s.end; return s; });
   const total = t + OUTRO;
 
   const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
-  const g = cv.getContext('2d');
+  const g = cv.getContext('2d')!;
   const vStream = cv.captureStream(FPS);
   const stream = new MediaStream([...vStream.getVideoTracks(), ...dest.stream.getAudioTracks()]);
   const mime = pickMime();
   const rec = new MediaRecorder(stream, { ...(mime ? { mimeType: mime } : {}), videoBitsPerSecond: 5_000_000, audioBitsPerSecond: 128_000 });
-  const chunks = [];
+  const chunks: Blob[] = [];
   rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
   const done = new Promise((ok) => (rec.onstop = ok));
 
@@ -195,7 +198,7 @@ export async function makeReel(clips, { onProgress = () => {}, title = 'HIGHLIGH
     o.connect(gn).connect(dest); o.start(t0 + s.judge); o.stop(t0 + s.judge + 0.55);
   }
 
-  const draw = (now) => {
+  const draw = (now: number) => {
     bg(g, now);
     if (now < INTRO) { // intro card
       const k = Math.min(1, now / 0.5);
@@ -208,7 +211,7 @@ export async function makeReel(clips, { onProgress = () => {}, title = 'HIGHLIGH
     }
     const s = segs.find((x) => now < x.end);
     if (s) {
-      const m = s.m, local = now - s.card;
+      const m = s.m;
       avatar(g, m, m._img, W / 2, 250, 92);
       text(g, (m.name || '').toUpperCase(), W / 2, 420, { size: 64 });
       text(g, `ROUND ${m.round || 1}`, W / 2, 465, { size: 24, font: 'DM', weight: 800, color: '#ffc23d' });
@@ -216,7 +219,7 @@ export async function makeReel(clips, { onProgress = () => {}, title = 'HIGHLIGH
       text(g, `“${m.lyric}”`, W / 2, 595, { size: 38, font: 'DM', weight: 800, color: '#fff4e6', maxW: W - 110, lh: 1.25 });
       if (now >= s.sing) { // singing: live waveform from their actual voice
         const i = Math.floor((now - s.sing) * FPS), live = now < s.judge;
-        const win = m._env.slice(Math.max(0, i - 24), i + 1);
+        const win = m._env!.slice(Math.max(0, i - 24), i + 1);
         while (win.length < 25) win.unshift(0);
         wave(g, win, 120, 790, W - 240, 120, live);
         if (live) text(g, '🎤 SINGING…', W / 2, 900, { size: 26, font: 'DM', weight: 800, color: '#ff6b1a' });
@@ -241,7 +244,7 @@ export async function makeReel(clips, { onProgress = () => {}, title = 'HIGHLIGH
   draw(0);
   rec.start(250);
   const startWall = performance.now() + 250;
-  await new Promise((resolve) => {
+  await new Promise<void>((resolve) => {
     const tick = () => {
       const now = (performance.now() - startWall) / 1000;
       draw(Math.max(0, now));

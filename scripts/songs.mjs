@@ -1,5 +1,5 @@
-// Curated song packs. Run `node scripts/build-packs.mjs` after editing:
-// it checks every song has synced lyrics + an official track and writes packs.json.
+// Curated song packs. Run `npm run packs` after editing:
+// it checks every song has synced lyrics + an official track and writes public/packs.json.
 
 export const PACKS = [
   {

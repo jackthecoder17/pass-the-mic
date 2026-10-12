@@ -1,3 +1,7 @@
+/* Tailwind theme + utilities only: no preflight, so the game-show design below renders exactly as designed */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 /* Pass The Mic — "game show" design: warm stage lighting, poster type, player avatars */
 :root {
   --night: #120a07;
@@ -422,3 +426,12 @@ body.cutting #app { animation: shake .45s; }
   .opts { gap: 8px; }
   h2 { font-size: 30px; }
 }
+
+/* legal pages */
+.doc { position: relative; z-index: 1; max-width: 640px; margin: 0 auto; padding: 24px 18px 60px; line-height: 1.65; }
+.doc h1 { font: 400 40px/1 var(--poster); margin: 18px 0 6px; }
+.doc h3 { font: 800 16px var(--body); margin: 26px 0 6px; color: var(--gold); letter-spacing: .02em; }
+.doc p, .doc li { color: var(--dim); font-size: 15.5px; }
+.doc ul { padding-left: 20px; display: grid; gap: 6px; }
+.doc b { color: var(--cream); }
+.doc a { color: var(--gold); }

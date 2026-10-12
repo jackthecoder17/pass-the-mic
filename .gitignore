@@ -3,3 +3,8 @@
 .DS_Store
 node_modules/
 design/promo/out/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.env*.local
