@@ -26,7 +26,8 @@ export async function POST(req: Request) {
 
   // only our own pages may use this (keeps strangers from burning the quota)
   const origin = req.headers.get('origin') || req.headers.get('referer') || '';
-  if (origin && !/^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|pass-the-mic[\w-]*\.vercel\.app)(\/|$)/.test(origin)) return send(403, { error: 'forbidden' });
+  // (production, plus this project's own preview deployments: pass-the-<id>-jackthecoder17s-projects.vercel.app)
+  if (origin && !/^https?:\/\/(localhost(:\d+)?|127\.0\.0\.1(:\d+)?|pass-the-mic[\w-]*\.vercel\.app|pass-the-[a-z0-9]+-jackthecoder17s-projects\.vercel\.app)(\/|$)/.test(origin)) return send(403, { error: 'forbidden' });
 
   try {
     if (Number(req.headers.get('content-length') || 0) > MAX_BYTES) return send(413, { error: 'audio too large' });
